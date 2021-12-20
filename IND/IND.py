@@ -17,7 +17,8 @@
 import datasets
 import torch
 import torch.nn.functional as F
-
+import numpy as np
+from sklearn.metrics import roc_auc_score
 
 # TODO: Add BibTeX citation
 _CITATION = """\
@@ -59,7 +60,7 @@ BAD_WORDS_URL = "http://url/to/external/resource/bad_words.txt"
 
 
 @datasets.utils.file_utils.add_start_docstrings(_DESCRIPTION, _KWARGS_DESCRIPTION)
-class NewMetric(datasets.Metric):
+class OOD(datasets.Metric):
     """TODO: Short description of my metric."""
 
     def _info(self):
@@ -91,51 +92,25 @@ class NewMetric(datasets.Metric):
     def _compute(self, predictions, references, is_sigmoid=False):
         """Returns the scores"""
         # TODO: Compute the different scores of the metric
-        logits, pooled, is_ind = predictions
-        pdb.set_trace()
-        accuracy = sum(i == j for i, j in zip(logits, references)) / len(predictions)
         
-        if is_sigmoid == False:
-            softmax_score = F.softmax(logits, dim=-1).max(-1)[0]
-        else:
-            softmax_score, sig_pred = F.sigmoid(logits).max(-1)
+        # accuracy = sum(i == j for i, j in zip(logits, references)) / len(predictions)
+        if self.config_name == 'maha_acc':
+            scores = []
 
-        maha_score = []
+            for c in self.label_id_list:
+                centered_pooled = predictions - self.class_mean[c].unsqueeze(0)
+                ms = torch.diag(centered_pooled @ self.class_var @ centered_pooled.t())
+                scores.append(ms)
+            scores = torch.stack(scores, dim=-1)
 
-        for c in self.label_id_list:
-            centered_pooled = pooled - self.class_mean[c].unsqueeze(0)
-            ms = torch.diag(centered_pooled @ self.class_var @ centered_pooled.t())
-            maha_score.append(ms)
-        maha_score = torch.stack(maha_score, dim=-1)
+            scores, pred = scores.min(-1)
+            scores = -scores
 
-        maha_score, pred = maha_score.min(-1)
-        maha_score = -maha_score
-        if ind == True:
-            if is_sigmoid == True:
-                correct = (references == sig_pred).float().sum()
-            else:
-                correct = (references == pred).float().sum()
-        else:
-            correct = 0
-
-        
-        norm_pooled = F.normalize(pooled, dim=-1)
-        cosine_score = norm_pooled @ self.norm_bank.t()
-        cosine_score = cosine_score.max(-1)[0]
-
-        energy_score = torch.logsumexp(logits, dim=-1)
-
-
+        accuracy = sum(i == j for i, j in zip(pred, references)) / len(predictions)
 
         return {
-            "accuracy": accuracy,
-            "maha_acc": maha_acc,
-            "AUROC(softmax)": auroc_softmax,
-            "FPR-95(softmax)": fpr95_softmax,
-            "AUROC(maha)": auroc_maha,
-            "FPR-95(maha)": fpr95_maha,
-            "AUROC(cosine)": auroc_cosine,
-            "FPR-95(cosine)": fpr95_cosine,
-            "AUROC(energy)": auroc_energy,
-            "FPR-95(energy)": fpr95_energy,
+           "maha accuracy": accuracy,
         }
+        
+        
+        

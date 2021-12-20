@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import pickle
 import os
 from tqdm import tqdm
-from utils import collate_fn, collate_fn_prefix
+from ood_utils import collate_fn, collate_fn_prefix
 from sklearn.metrics import roc_auc_score
 
 
@@ -70,7 +70,7 @@ def evaluate_ood(args, method_name, model_engine, label_id_list, class_mean,
         batch = {key: value.to(args.device) for key, value in batch.items()}
         with torch.no_grad():
             ood_keys = compute_ood(model_engine, **batch, label_id_list=label_id_list, class_mean=class_mean, 
-                                         class_var=class_var, norm_bank=norm_bank, ind = True)
+                                         class_var=class_var, norm_bank=norm_bank, ind=True)
             in_scores.append(ood_keys)
     in_scores = merge_keys(in_scores, keys)
     
@@ -264,14 +264,10 @@ def prepare_ood(model_engine, dataloader, config):
         batch = {key: value.cuda() for key, value in batch.items()}
         # print(batch['labels'])
         labels = batch['labels']
-        outputs = model_engine(
-            input_ids=batch['input_ids'],
-            attention_mask=batch['attention_mask'],
-        )
-
+        outputs = model_engine(**batch)
         # last CLS!
-        out_all_hidden = outputs.hidden_states
-        pooled = get_maha_embedding(batch['input_ids'], out_all_hidden, config)
+        last_hidden = outputs[2]
+        pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
 
         if bank is None:
             bank = pooled.clone().detach()
@@ -292,10 +288,6 @@ def prepare_ood(model_engine, dataloader, config):
     class_var = torch.from_numpy(precision).float().cuda()
     print("Preparation for OOD done...")
     
-    model_engine.class_mean = class_mean
-    model_engine.class_var = class_var
-    model_engine.norm_bank = norm_bank
-
     return class_mean, class_var, norm_bank
 
 
@@ -348,15 +340,15 @@ def compute_ood(model, config, input_ids, label_id_list, class_mean, class_var, 
     }
     return ood_keys
 
-def get_maha_embedding(input_ids, out_all_hidden, config):
+def get_maha_embedding(input_ids, last_hidden, config):
     # pooled = out_all_hidden[-1][:, 0, :]
     if "gpt" in config.name_or_path.lower(): # gpt2: last token for classification
         if config.pad_token_id is not None: # padding is applied 
             sequence_lengths = torch.ne(input_ids, config.pad_token_id).sum(-1) - 1
-            pooled = F.normalize(out_all_hidden[-1][range(len(input_ids)), sequence_lengths], dim=-1) # last embedding before padding
+            pooled = F.normalize(last_hidden[range(len(input_ids)), sequence_lengths], dim=-1) # last embedding before padding
         else: # no padding
-            pooled = F.normalize(out_all_hidden[-1][:, -1, :],dim=-1)
+            pooled = F.normalize(last_hidden[:, -1, :],dim=-1)
     else:   # roberta/deberta: output[0] of PLM
-        pooled = F.normalize(out_all_hidden[-1][:, 0, :],dim=-1)
+        pooled = F.normalize(last_hidden[:, 0, :],dim=-1)
 
     return pooled

@@ -6,7 +6,8 @@ import os
 import random
 import json
 from pathlib import Path
-
+import pdb
+import numpy as np
 import datasets
 from datasets import load_dataset, load_metric, DatasetDict
 from torch.utils.data import DataLoader
@@ -47,6 +48,9 @@ task_to_keys = {
     "sst2": ("sentence", None),
     "stsb": ("sentence1", "sentence2"),
     "wnli": ("sentence1", "sentence2"),
+    'clinc150': ("text", None),
+    'snips': ("text", None),
+    'banking77': ("text", None),
 }
 
 def parse_args():
@@ -281,6 +285,7 @@ def parse_args():
         ds_config = json.load(ds_f)
     args.per_device_batch_size = ds_config['train_micro_batch_size_per_gpu']
     args.gradient_accumulation_steps = ds_config['gradient_accumulation_steps']
+    args.is_zero3 = False
     if ds_config.get("zero_optimization"):
         args.is_zero3 = ds_config["zero_optimization"]["stage"] == 3
 
@@ -372,9 +377,11 @@ def main():
         logger.info('TRAIN / VALIDATION / TEST split.')
         for split, dataset in raw_datasets.items():
             logger.info(f'{split} > {len(dataset)}')
-
+        # print(raw_datasets)
+        # print(raw_datasets.keys())
+        # print(raw_datasets['train'][0])
     # Labels
-    if args.task_name is not None:
+    if args.task_name is not None and args.task_name not in intent_tasks:
         label_list = raw_datasets["train"].features["label"].names
         num_labels = len(label_list)
     else:
@@ -394,15 +401,15 @@ def main():
         apply_lora=args.apply_lora, lora_alpha=args.lora_alpha, lora_r=args.lora_r,
         apply_prefix=args.apply_prefix, num_prefix=args.num_prefix, mid_dim=args.mid_dim,
         apply_encoder=args.apply_encoder, apply_input=args.apply_input, encoder_model_name_or_path=args.encoder_model_name_or_path,
-        freeze_encoder=args.freeze_encoder, prompt_length=args.prompt_length, output_hidden_states=(args.task_name in intent_tasks),
+        freeze_encoder=args.freeze_encoder, prompt_length=args.prompt_length,
     )
-
+    
     # TODO : fix?
     if args.is_zero3:
         with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
-            model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir)
+            model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
     else:
-        model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir)
+        model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
 
     # Preprocessing the datasets
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
@@ -530,7 +537,15 @@ def main():
 
     # Get the metric function
     if args.task_name in intent_tasks:
-        metric = load_metric('OOD', args.task_name, num_process=args.world_size, process_id=args.local_rank)
+        # ood_metric_logits = load_metric('OOD', 'logits', num_process=args.world_size, process_id=args.local_rank)
+        # ood_metric_pooled = load_metric('OOD', 'pooled', num_process=args.world_size, process_id=args.local_rank)
+        ood_metric_energy = load_metric('OOD', 'energy', num_process=args.world_size, process_id=args.local_rank)
+        ood_metric_softmax = load_metric('OOD', 'softmax', num_process=args.world_size, process_id=args.local_rank)
+        ood_metric_maha = load_metric('OOD', 'maha', num_process=args.world_size, process_id=args.local_rank)
+        ood_metric_cosine = load_metric('OOD', 'cosine', num_process=args.world_size, process_id=args.local_rank)
+        ind_metric = load_metric('accuracy', num_process=args.world_size, process_id=args.local_rank)
+        ind_metric_maha = load_metric('IND', 'maha_acc', num_process=args.world_size, process_id=args.local_rank)
+        metrics = [ind_metric, ind_metric_maha, ood_metric_softmax, ood_metric_energy, ood_metric_cosine, ood_metric_maha]
     elif args.task_name is not None:
         metric = load_metric('glue', args.task_name, num_process=args.world_size, process_id=args.local_rank)
     else:
@@ -641,15 +656,18 @@ def main():
     # for mahalanobis
     label_id_list = []
     for train_data in train_dataset:
-        label = train_data['label']
+        label = train_data['labels']
         if label not in label_id_list:
             label_id_list.append(label)
     label_id_list.sort()
+    
     for epoch in range(args.num_train_epochs):
         model_engine.train()
+        train_sampler.set_epoch(epoch)
         for step, batch in enumerate(train_dataloader):
             batch = {k: v.cuda() for k, v in batch.items()}
-            loss, _, _ = model_engine(**batch)
+            output = model_engine(**batch)
+            loss = output[0]
             loss = loss / args.gradient_accumulation_steps
             if args.local_rank == 0:
                 writer.add_scalar('Train/Loss', loss, model_engine.global_steps)
@@ -665,31 +683,67 @@ def main():
                 break
 
         model_engine.eval()    
-        if model_engine.process_id == 0:
-            prepare_ood(model_engine, train_dataloader, config)
-
-        torch.distributed.barrier()
-        for step, batch in enumerate(test_ind_dataloader):
-            with torch.no_grad():
-                batch = {k: v.cuda() for k, v in batch.items()}
-                loss, predictions, out_all_hidden = model_engine(**batch)
-                
-                pooled = get_maha_embedding(batch['input_ids'], out_all_hidden, config)
-                metric.add_batch(
-                    predictions=[predictions, pooled, 1],
-                    references=batch["labels"],
-                )
-        for step, batch in enumerate(test_ood_dataloader):
-            with torch.no_grad():
-                batch = {k: v.cuda() for k, v in batch.items()}
-                loss, predictions, out_all_hidden = model_engine(**batch)
-                
-                pooled = get_maha_embedding(batch['input_ids'], out_all_hidden, config)
-                metric.add_batch(
-                    predictions=[predictions, pooled, 0],
-                    references=batch["labels"],
-                )
-        eval_metric = metric.compute() # evaluate ood
+        if args.task_name in intent_tasks:
+            if args.local_rank == 0:
+                class_mean, class_var, norm_bank = prepare_ood(model_engine, train_dataloader, config)
+            torch.distributed.barrier()
+        
+            for step, batch in enumerate(test_ind_dataloader):
+                with torch.no_grad():
+                    batch = {k: v.cuda() for k, v in batch.items()}
+                    loss, predictions, last_hidden = model_engine(**batch)
+                    pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
+                    ood_metric_softmax.add_batch(
+                        predictions=predictions,
+                        references=np.ones(len(predictions)),
+                    )
+                    ood_metric_maha.add_batch(
+                        predictions=pooled,
+                        references=np.ones(len(predictions)),
+                    )
+                    ood_metric_cosine.add_batch(
+                        predictions=pooled,
+                        references=np.ones(len(predictions)),
+                    )
+                    ood_metric_energy.add_batch(
+                        predictions=predictions,
+                        references=np.ones(len(predictions)),
+                    )
+                    ind_metric.add_batch(
+                        predictions=predictions,
+                        references=batch["labels"],
+                    )
+                    ind_metric_maha.add_batch(
+                        predictions=pooled,
+                        references=batch["labels"],
+                    )
+            for step, batch in enumerate(test_ood_dataloader):
+                with torch.no_grad():
+                    batch = {k: v.cuda() for k, v in batch.items()}
+                    loss, predictions, last_hidden = model_engine(**batch)    
+                    pdb.set_trace()            
+                    pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
+                    if args.task_name in intent_tasks:
+                        ood_metric_softmax.add_batch(
+                            predictions=predictions,
+                            references=np.zeros(len(predictions)),
+                        )
+                        ood_metric_maha.add_batch(
+                            predictions=pooled,
+                            references=np.zeros(len(predictions)),
+                        )
+                        ood_metric_cosine.add_batch(
+                            predictions=pooled,
+                            references=np.zeros(len(predictions)),
+                        )
+                        ood_metric_energy.add_batch(
+                            predictions=predictions,
+                            references=np.zeros(len(predictions)),
+                        )
+            eval_metric = {}
+            for metric in metrics:
+                eval_metric.update(metric.compute())
+        # eval_metric = metric.compute() # evaluate ood
         if args.local_rank == 0:
             writer.add_scalar('Validation/Accuracy', eval_metric['accuracy'], model_engine.global_steps)
             logger.info(f"Valditaion step {model_engine.global_steps} results {eval_metric}")

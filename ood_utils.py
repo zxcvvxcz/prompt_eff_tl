@@ -3,6 +3,7 @@ import json
 import torch
 from tqdm import tqdm
 import pickle
+from datasets import Dataset
 import pdb
 
 task_to_keys = {
@@ -341,7 +342,7 @@ def transfrom_data_dict(data_dict):
     for data in data_dict[1:]:
         for k, v in data.items():
             new_data_dict[k].append(v)
-    return new_data_dict
+    return Dataset.from_dict(new_data_dict)
 
 def preprocess_dataset_for_transformers(dataset):
     # datasets = {'train': train_dataset, 'validation': dev_dataset, 'test_ind': test_ind_dataset, 'test_ood': test_ood_dataset}
