@@ -62,4 +62,5 @@ class BaseOutputProcessor(torch.nn.Module):
 
         # loss        : (batch, )
         # predictions : (batch, )
-        return loss, predictions
+        
+        return loss, pooled_logits

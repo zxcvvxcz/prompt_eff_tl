@@ -256,7 +256,7 @@ def collate_fn(batch, pad_token_id=50256):
         last_true_token_idx = f['input_ids'].index(pad_token_id) if pad_token_id in f['input_ids'] else len(f['input_ids'])
         input_mask.append([1.0] * last_true_token_idx + [0.0] * (max_len - last_true_token_idx))
     # input_mask = [[1.0] * len(f["input_ids"]) + [0.0] * (max_len - len(f["input_ids"])) for f in batch]
-    labels = [f["label"] for f in batch]
+    labels = [f["labels"] for f in batch]
     input_ids = torch.tensor(input_ids, dtype=torch.long)
     input_mask = torch.tensor(input_mask, dtype=torch.float)
     labels = torch.tensor(labels, dtype=torch.long)

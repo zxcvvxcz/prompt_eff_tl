@@ -14,6 +14,8 @@
 # limitations under the License.
 """TODO: Add a description here."""
 
+import pdb
+from typing import Optional, Tuple, Union
 import datasets
 import torch
 import torch.nn.functional as F
@@ -62,7 +64,28 @@ BAD_WORDS_URL = "http://url/to/external/resource/bad_words.txt"
 @datasets.utils.file_utils.add_start_docstrings(_DESCRIPTION, _KWARGS_DESCRIPTION)
 class OOD(datasets.Metric):
     """TODO: Short description of my metric."""
-
+    # def __init__(self,
+    #     config_name: Optional[str] = None,
+    #     keep_in_memory: bool = False,
+    #     cache_dir: Optional[str] = None,
+    #     num_process: int = 1,
+    #     process_id: int = 0,
+    #     seed: Optional[int] = None,
+    #     experiment_id: Optional[str] = None,
+    #     max_concurrent_cache_files: int = 10000,
+    #     timeout: Union[int, float] = 100,
+    #     label_id_list = None,
+    #     class_mean = None,
+    #     class_var = None,
+    #     norm_bank = None,
+    #     **kwargs,):
+    #     super(datasets.Metric, self).__init__(config_name, keep_in_memory, cache_dir, num_process, process_id, seed, experiment_id, 
+    #                                           max_concurrent_cache_files, timeout)
+    #     self.label_id_list = label_id_list
+    #     self.class_mean = class_mean
+    #     self.class_var = class_var
+    #     self.norm_bank = norm_bank
+        
     def _info(self):
         # TODO: Specifies the datasets.MetricInfo object
         return datasets.MetricInfo(
@@ -72,8 +95,8 @@ class OOD(datasets.Metric):
             inputs_description=_KWARGS_DESCRIPTION,
             # This defines the format of each prediction and reference
             features=datasets.Features({
-                'predictions': datasets.Value('string'),
-                'references': datasets.Value('string'),
+                'predictions': datasets.Value('float32'),
+                'references': datasets.Value('int8'),
             }),
             # Homepage of the metric for documentation
             homepage="http://metric.homepage",
@@ -94,36 +117,9 @@ class OOD(datasets.Metric):
         # TODO: Compute the different scores of the metric
         
         # accuracy = sum(i == j for i, j in zip(logits, references)) / len(predictions)
-        if self.config_name == 'softmax':
-            if is_sigmoid == False:
-                scores = F.softmax(predictions, dim=-1).max(-1)[0]
-            else:
-                scores, sig_pred = F.sigmoid(predictions).max(-1)
-
-        if self.config_name == 'maha':
-            scores = []
-
-            for c in self.label_id_list:
-                centered_pooled = predictions - self.class_mean[c].unsqueeze(0)
-                ms = torch.diag(centered_pooled @ self.class_var @ centered_pooled.t())
-                scores.append(ms)
-            scores = torch.stack(scores, dim=-1)
-
-            scores, pred = scores.min(-1)
-            scores = -scores
         
-        if self.config_name == 'maha_acc':
-            correct = (references == pred).float().sum()
 
-        if self.config_name == 'cosine':
-            norm_pooled = F.normalize(predictions, dim=-1)
-            scores = norm_pooled @ self.norm_bank.t()
-            scores = scores.max(-1)[0]
-
-        if self.config_name == 'energy':
-            scores = torch.logsumexp(predictions, dim=-1)
-
-        auroc, fpr_95 = get_auroc(references, scores), get_fpr_95(references, scores)
+        auroc, fpr_95 = get_auroc(references, predictions), get_fpr_95(references, predictions)
 
         return {
            f"AUROC({self.config_name})": auroc,
@@ -131,21 +127,18 @@ class OOD(datasets.Metric):
         }
         
         
-        
-        
-
-
 def get_auroc(key, prediction):
     new_key = np.copy(key)
-    new_key[key == 0] = 0
-    new_key[key > 0] = 1
+    new_key[new_key == 0] = 0
+    new_key[new_key > 0] = 1
     return roc_auc_score(new_key, prediction)
 
 
 def get_fpr_95(key, prediction, return_indices=False):
     new_key = np.copy(key)
-    new_key[key == 0] = 0
-    new_key[key > 0] = 1
+    new_key[new_key == 0] = 0
+    new_key[new_key > 0] = 1
+    prediction = np.array(prediction, dtype=np.float32)
     if return_indices:
         score, indices = fpr_and_fdr_at_recall(new_key, prediction, return_indices)
         return score, indices

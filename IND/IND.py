@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """TODO: Add a description here."""
-
+import pdb
+from typing import Optional, Tuple, Union
 import datasets
 import torch
 import torch.nn.functional as F
@@ -62,7 +63,6 @@ BAD_WORDS_URL = "http://url/to/external/resource/bad_words.txt"
 @datasets.utils.file_utils.add_start_docstrings(_DESCRIPTION, _KWARGS_DESCRIPTION)
 class OOD(datasets.Metric):
     """TODO: Short description of my metric."""
-
     def _info(self):
         # TODO: Specifies the datasets.MetricInfo object
         return datasets.MetricInfo(
@@ -72,8 +72,8 @@ class OOD(datasets.Metric):
             inputs_description=_KWARGS_DESCRIPTION,
             # This defines the format of each prediction and reference
             features=datasets.Features({
-                'predictions': datasets.Value('string'),
-                'references': datasets.Value('string'),
+                'predictions': datasets.Value('float32'),
+                'references': datasets.Value('int8'),
             }),
             # Homepage of the metric for documentation
             homepage="http://metric.homepage",
@@ -95,18 +95,7 @@ class OOD(datasets.Metric):
         
         # accuracy = sum(i == j for i, j in zip(logits, references)) / len(predictions)
         if self.config_name == 'maha_acc':
-            scores = []
-
-            for c in self.label_id_list:
-                centered_pooled = predictions - self.class_mean[c].unsqueeze(0)
-                ms = torch.diag(centered_pooled @ self.class_var @ centered_pooled.t())
-                scores.append(ms)
-            scores = torch.stack(scores, dim=-1)
-
-            scores, pred = scores.min(-1)
-            scores = -scores
-
-        accuracy = sum(i == j for i, j in zip(pred, references)) / len(predictions)
+            accuracy = sum(i == j for i, j in zip(predictions, references)) / len(predictions)
 
         return {
            "maha accuracy": accuracy,
