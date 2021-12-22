@@ -16,6 +16,7 @@ from datasets import load_dataset, load_metric, DatasetDict
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 import csv
+from time import time
 
 
 import transformers
@@ -34,6 +35,7 @@ from transformers import (
 import torch
 import torch.nn.functional as F
 import deepspeed
+from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 
@@ -43,7 +45,7 @@ from utils import save_config, set_value_to_shared_json_file, get_value_from_sha
 from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn
 from ood_eval import prepare_ood, get_maha_embedding
 logger = logging.getLogger(__name__)
-
+start = time()
 task_to_keys = {
     "cola": ("sentence", None),
     "mnli": ("premise", "hypothesis"),
@@ -423,6 +425,8 @@ def main():
     else:
         model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
 
+    # predict memory usage
+    estimate_zero3_model_states_mem_needs_all_live(model.transformer, num_gpus_per_node=torch.cuda.device_count(), num_nodes=1)
     # Preprocessing the datasets
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
 
@@ -805,7 +809,10 @@ def main():
         # save_flag = get_value_from_shared_json_file(args.output_dir, 'save_flag')
         # if save_flag:
             # model_engine.save_checkpoint(args.output_dir)
-    
+    if args.local_rank == 0:
+        end = time()
+        with open(os.path.join(args.output_dir, 'elapsed_time.txt'), 'w') as f:
+            f.write(f'{(end - start) // 3600}h {((end - start) % 3600) // 60}m {(end - start) % 60}s')
     # load best dev model 
     # TODO: In ZeRO3 load checkpoint after save checkpoint do not work!!
     if not args.is_zero3:

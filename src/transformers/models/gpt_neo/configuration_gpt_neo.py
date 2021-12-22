@@ -119,6 +119,20 @@ class GPTNeoConfig(PretrainedConfig):
         summary_proj_to_labels=True,
         summary_first_dropout=0.1,
         use_cache=True,
+        apply_lora=False,
+        lora_alpha=None,
+        lora_r=None,
+        apply_adapter=False,
+        adapter_type=None,
+        adapter_size=None,
+        apply_prefix=False,
+        num_prefix=0,
+        mid_dim=0,
+        apply_encoder=False,
+        apply_input=False,
+        encoder_model_name_or_path=None,
+        freeze_encoder=False,
+        prompt_length=None,
         bos_token_id=50256,
         eos_token_id=50256,
         **kwargs
@@ -145,6 +159,28 @@ class GPTNeoConfig(PretrainedConfig):
 
         self.bos_token_id = bos_token_id
         self.eos_token_id = eos_token_id
+
+        # for LoRA
+        self.apply_lora=apply_lora
+        self.lora_alpha=lora_alpha
+        self.lora_r=lora_r
+
+        # for adapter
+        self.apply_adapter=apply_adapter
+        self.adapter_type=adapter_type
+        self.adapter_size=adapter_size
+
+        # for prefix-tuning
+        self.apply_prefix=apply_prefix
+        self.num_prefix=num_prefix
+        self.mid_dim=mid_dim
+
+        # for OUR method
+        self.apply_encoder=apply_encoder
+        self.apply_input=apply_input
+        self.encoder_model_name_or_path=encoder_model_name_or_path
+        self.freeze_encoder=freeze_encoder
+        self.prompt_length=prompt_length
 
         self.attention_types = attention_types
         self.attention_layers = self.expand_attention_types_params(attention_types)
