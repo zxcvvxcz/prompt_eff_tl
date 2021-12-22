@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from functools import partial
 import pdb
+import pandas as pd
+
 import numpy as np
 import datasets
 from datasets import load_dataset, load_metric, DatasetDict
@@ -664,11 +666,16 @@ def main():
     # # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=(args.local_rank != 0))
     completed_steps = 0
-    best_acc = 0
+    best_maha_auroc = 0
     save_flag = False
+    patience = 0
+    EARLY_STOP = 5
+    log_path = os.path.join(args.output_dir,'eval_result.tsv')
     
     for epoch in range(args.num_train_epochs):
         model_engine.train()
+        if patience >= EARLY_STOP:
+            break
         train_sampler.set_epoch(epoch)
         for step, batch in enumerate(train_dataloader):
             batch = {k: v.cuda() for k, v in batch.items()}
@@ -763,7 +770,6 @@ def main():
         # eval_metric = metric.compute() # evaluate ood
         if args.local_rank == 0:
             write_setting = 'w' if epoch < 1 else 'a'
-            log_path = os.path.join('ood_result','eval_result.tsv')
             with open(log_path, write_setting) as f:
                 csv_writer = csv.writer(f, delimiter='\t')
                 title = sorted(eval_metric.keys())
@@ -773,15 +779,22 @@ def main():
             for k, v in eval_metric.items():
                 writer.add_scalar(f'Validation/{k}', eval_metric[k], model_engine.global_steps)
             logger.info(f"Valditaion step {model_engine.global_steps} results {eval_metric}")
-            if eval_metric['accuracy'] > best_acc:
-                best_acc = eval_metric['accuracy']
-                save_flag = True            
-            else:
-                save_flag = False
+        torch.distributed.barrier()
+        
+        metric_df = pd.read_csv(log_path, delimiter='\t', header=0)
+        print(metric_df['AUROC(maha)'])
+        print(metric_df['AUROC(maha)'].iloc[-1])
+        if metric_df['AUROC(maha)'].iloc[-1] > best_maha_auroc:
+            best_maha_auroc = metric_df['AUROC(maha)'].iloc[-1]
+            save_flag = True      
+            patience = 0      
+        else:
+            save_flag = False
+            patience += 1
         
         # path, key, value, current rank, writer rank
-        set_value_to_shared_json_file(args.output_dir, 'save_flag', save_flag, args.local_rank, 0)
-        save_flag = get_value_from_shared_json_file(args.output_dir, 'save_flag')
+        # set_value_to_shared_json_file(args.output_dir, 'save_flag', save_flag, args.local_rank, 0)
+        # save_flag = get_value_from_shared_json_file(args.output_dir, 'save_flag')
         # if save_flag:
             # model_engine.save_checkpoint(args.output_dir)
     

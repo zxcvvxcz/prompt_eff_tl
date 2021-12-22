@@ -64,27 +64,6 @@ BAD_WORDS_URL = "http://url/to/external/resource/bad_words.txt"
 @datasets.utils.file_utils.add_start_docstrings(_DESCRIPTION, _KWARGS_DESCRIPTION)
 class OOD(datasets.Metric):
     """TODO: Short description of my metric."""
-    # def __init__(self,
-    #     config_name: Optional[str] = None,
-    #     keep_in_memory: bool = False,
-    #     cache_dir: Optional[str] = None,
-    #     num_process: int = 1,
-    #     process_id: int = 0,
-    #     seed: Optional[int] = None,
-    #     experiment_id: Optional[str] = None,
-    #     max_concurrent_cache_files: int = 10000,
-    #     timeout: Union[int, float] = 100,
-    #     label_id_list = None,
-    #     class_mean = None,
-    #     class_var = None,
-    #     norm_bank = None,
-    #     **kwargs,):
-    #     super(datasets.Metric, self).__init__(config_name, keep_in_memory, cache_dir, num_process, process_id, seed, experiment_id, 
-    #                                           max_concurrent_cache_files, timeout)
-    #     self.label_id_list = label_id_list
-    #     self.class_mean = class_mean
-    #     self.class_var = class_var
-    #     self.norm_bank = norm_bank
         
     def _info(self):
         # TODO: Specifies the datasets.MetricInfo object
