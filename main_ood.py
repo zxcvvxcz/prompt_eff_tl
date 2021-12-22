@@ -13,6 +13,8 @@ import datasets
 from datasets import load_dataset, load_metric, DatasetDict
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+import csv
+
 
 import transformers
 from transformers.deepspeed import HfDeepSpeedConfig
@@ -258,8 +260,7 @@ def parse_args():
     # OOD
     parser.add_argument(
         '--split', 
-        default=True, 
-        type=bool, 
+        action="store_true",
         help='Split setting for intent datasets.'
     )
     parser.add_argument(
@@ -691,13 +692,6 @@ def main():
         if args.task_name in intent_tasks:
             # if args.local_rank == 0:
             class_mean, class_var, norm_bank = prepare_ood(model_engine, train_dataloader, config)
-                
-            torch.distributed.barrier()
-            # for metric in metrics:
-            #     metric.class_mean = class_mean
-            #     metric.class_var = class_var
-            #     metric.norm_bank = norm_bank
-            #     metric.label_id_list = label_id_list
         
             for step, batch in enumerate(test_ind_dataloader):
                 with torch.no_grad():
@@ -768,7 +762,16 @@ def main():
                     eval_metric.update(new_metric)
         # eval_metric = metric.compute() # evaluate ood
         if args.local_rank == 0:
-            writer.add_scalar('Validation/Accuracy', eval_metric['accuracy'], model_engine.global_steps)
+            write_setting = 'w' if epoch < 1 else 'a'
+            log_path = os.path.join('ood_result','eval_result.tsv')
+            with open(log_path, write_setting) as f:
+                csv_writer = csv.writer(f, delimiter='\t')
+                title = sorted(eval_metric.keys())
+                if write_setting == 'w':
+                    csv_writer.writerow(title)
+                csv_writer.writerow([eval_metric[k] for k in title])
+            for k, v in eval_metric.items():
+                writer.add_scalar(f'Validation/{k}', eval_metric[k], model_engine.global_steps)
             logger.info(f"Valditaion step {model_engine.global_steps} results {eval_metric}")
             if eval_metric['accuracy'] > best_acc:
                 best_acc = eval_metric['accuracy']

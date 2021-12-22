@@ -69,8 +69,9 @@ class GPT2Wrapper(torch.nn.Module):
 
         # loss        : (batch, )
         # predictions : (batch, )
-        loss, predictions = self.output_processor(last_hidden_state=last_hidden_state, attention_mask=attention_mask, labels=labels)
+        # logits      : (batch, num_labels)
+        loss, logits = self.output_processor(last_hidden_state=last_hidden_state, attention_mask=attention_mask, labels=labels)
         
-        result = (loss, predictions, last_hidden_state) if self.get_last_hidden_state else (loss, predictions)
+        result = (loss, logits, last_hidden_state) if self.get_last_hidden_state else (loss, logits)
         return result
             
