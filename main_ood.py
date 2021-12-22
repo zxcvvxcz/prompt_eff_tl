@@ -146,7 +146,7 @@ def parse_args():
         type=str,
         default="linear",
         help="The scheduler type to use.",
-        choices=["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"],
+        choices=["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup", "cosine_custom"],
     )
     parser.add_argument(
         "--num_warmup_steps", 
@@ -271,6 +271,13 @@ def parse_args():
         type=float, 
         help='Split ratio for intent datasets.'
     )
+    parser.add_argument(
+        '--lr_ratio', 
+        default=0.2, 
+        type=float, 
+        help='Learning ratio for custom cosine lr scheduler, must be between 0.1~0.2.'
+    )
+
 
     args = parser.parse_args()
     
@@ -643,6 +650,7 @@ def main():
         optimizer=optimizer,
         num_warmup_steps=args.num_warmup_steps,
         num_training_steps=args.max_train_steps,
+        lr_ratio=args.lr_ratio
     )
 
     model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, config_params=args.ds_config)
