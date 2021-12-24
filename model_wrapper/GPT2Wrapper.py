@@ -1,6 +1,6 @@
 
 from typing import Tuple
-
+import pdb
 import torch
 
 from transformers import AutoModel
@@ -15,6 +15,7 @@ class GPT2Wrapper(torch.nn.Module):
         super(GPT2Wrapper, self).__init__()
 
         self.config = config
+        
         self.get_last_hidden_state = get_last_hidden_state
         # Main model
         self.transformer = AutoModel.from_pretrained(
@@ -31,6 +32,7 @@ class GPT2Wrapper(torch.nn.Module):
         # for other methods (LoRA, Adapter, Prefix-tuning)
         # input_ids -> input_embeds
         if not self.config.apply_input and not self.config.apply_encoder and self.config.prompt_length is None:
+            print('get base input processor')
             self.input_processor = BaseInputProcessor(config=config, embeddings=self.transformer.wte)
         # for PROMPT_TUNING
         elif not self.config.apply_input and not self.config.apply_encoder:
@@ -41,7 +43,6 @@ class GPT2Wrapper(torch.nn.Module):
         # for PLM encoder + input dependent
         elif self.config.apply_input and self.config.apply_encoder:
             self.input_processor = EncoderInputProcessor(config=config, embeddings=self.transformer.wte)
-        
 
     def forward(
         self,

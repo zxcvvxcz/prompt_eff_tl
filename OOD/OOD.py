@@ -75,7 +75,7 @@ class OOD(datasets.Metric):
             # This defines the format of each prediction and reference
             features=datasets.Features({
                 'predictions': datasets.Value('float32'),
-                'references': datasets.Value('int8'),
+                'references': datasets.Value('int16'),
             }),
             # Homepage of the metric for documentation
             homepage="http://metric.homepage",

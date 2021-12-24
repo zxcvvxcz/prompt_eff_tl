@@ -39,7 +39,7 @@ from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 
-from models.GPT2Wrapper import GPT2Wrapper
+from model_wrapper.GPT2Wrapper import GPT2Wrapper
 from utils import save_config, set_value_to_shared_json_file, get_value_from_shared_json_file
 
 from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn
@@ -108,12 +108,6 @@ def parse_args():
         required=True,
     )
     parser.add_argument(
-        "--per_device_batch_size",
-        type=int,
-        default=8,
-        help="Batch size (per device) for the training dataloader.",
-    )
-    parser.add_argument(
         "--lr",
         type=float,
         default=5e-5,
@@ -161,6 +155,12 @@ def parse_args():
         type=str, 
         default=None, 
         help="Where to store the final model."
+    )
+    parser.add_argument(
+        '--overwrite_output_dir', 
+        default=False, 
+        action="store_true",
+        help='Overwrite output directory.'
     )
     parser.add_argument(
         "--seed", 
@@ -249,10 +249,22 @@ def parse_args():
         help='Freeze PLM for the encoder.'
     )
     parser.add_argument(
+        '--apply_prompt', 
+        default=False, 
+        action="store_true",
+        help='apply prompt tuning'
+    )
+    parser.add_argument(
         '--prompt_length', 
         default=None, 
         type=int, 
         help='Number of prompt tokens.'
+    )
+    parser.add_argument(
+        '--reparameterize', 
+        default=False, 
+        action="store_true",
+        help='Reparameterize prompt.'
     )
     parser.add_argument(
         '--cache_dir', 
@@ -299,10 +311,11 @@ def parse_args():
         ds_config = json.load(ds_f)
     args.per_device_batch_size = ds_config['train_micro_batch_size_per_gpu']
     args.gradient_accumulation_steps = ds_config['gradient_accumulation_steps']
-    args.is_zero3 = False
     if ds_config.get("zero_optimization"):
         args.is_zero3 = ds_config["zero_optimization"]["stage"] == 3
-
+    else:
+        args.is_zero3 = False
+        
     return args
 
 
@@ -321,6 +334,21 @@ def main():
 
     # Setup logging, we only want one process per machine to log things on the screen.
     logger.setLevel(logging.INFO if args.local_rank == 0 else logging.ERROR)
+    # logger.setLevel(logging.INFO)
+    if args.output_dir is not None:
+        if not os.path.isdir(args.output_dir):
+            os.makedirs(args.output_dir, exist_ok=True)
+        else:
+            if not args.overwrite_output_dir:
+                logger.info(f'Output directory {args.output_dir} exits. Exit program. (overwrite_output_dir=False)')
+                exit()
+            
+    logging_output_file = os.path.join(args.output_dir, "output.log")
+    file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+    file_handler = logging.FileHandler(logging_output_file)
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)   
+    
     if args.local_rank == 0:
         datasets.utils.logging.set_verbosity_warning()
         transformers.utils.logging.set_verbosity_info()
@@ -391,9 +419,7 @@ def main():
         logger.info('TRAIN / VALIDATION / TEST split.')
         for split, dataset in raw_datasets.items():
             logger.info(f'{split} > {len(dataset)}')
-        # print(raw_datasets)
-        # print(raw_datasets.keys())
-        # print(raw_datasets['train'][0])
+            
     # Labels
     if args.task_name is not None and args.task_name not in intent_tasks:
         label_list = raw_datasets["train"].features["label"].names
@@ -416,6 +442,7 @@ def main():
         apply_prefix=args.apply_prefix, num_prefix=args.num_prefix, mid_dim=args.mid_dim,
         apply_encoder=args.apply_encoder, apply_input=args.apply_input, encoder_model_name_or_path=args.encoder_model_name_or_path,
         freeze_encoder=args.freeze_encoder, prompt_length=args.prompt_length,
+        reparameterize=args.reparameterize,
     )
     
     # TODO : fix?
@@ -425,9 +452,7 @@ def main():
     else:
         model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
 
-    # predict memory usage
-    estimate_zero3_model_states_mem_needs_all_live(model.transformer, num_gpus_per_node=torch.cuda.device_count(), num_nodes=1)
-    # Preprocessing the datasets
+   # Preprocessing the datasets
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
 
     # Some models have set the order of the labels to use, so let's make sure we do use it.
@@ -457,11 +482,12 @@ def main():
         model.config.label2id = label_to_id
         model.config.id2label = {id: label for label, id in config.label2id.items()}
     elif args.task_name is not None:
-        logger.info('Auto label2id, id2label created')
+        if args.local_rank == 0:
+            logger.info('Auto label2id, id2label created')
         model.config.label2id = {l: i for i, l in enumerate(label_list)}
         model.config.id2label = {id: label for label, id in config.label2id.items()}
 
-    padding = "max_length" if args.pad_to_max_length else True
+    padding = "max_length" if args.pad_to_max_length else False
 
     def preprocess_function(examples):
         # Tokenize the texts
@@ -481,28 +507,6 @@ def main():
     
     if args.local_rank != 0:
         torch.distributed.barrier()
-
-    # if args.task_name in intent_tasks:
-    #     train_dataset = list(map(preprocess_function, enumerate(datasets['train']))) if 'train' in datasets else None
-    #     train_dataset = [{k:v for k, v in x.items() if k in dataloader_cols} for x in train_dataset]
-    #     if args.max_train_samples is not None:
-    #         train_dataset = train_dataset[:args.max_train_samples]
-
-    #     eval_dataset = list(map(preprocess_function, enumerate(datasets['validation']))) if 'validation' in datasets else None
-    #     eval_dataset = [{k:v for k, v in x.items() if k in dataloader_cols} for x in eval_dataset]
-    #     if args.max_val_samples is not None:
-    #         eval_dataset = eval_dataset[:args.max_val_samples]
-
-    #     test_ind_dataset = list(map(preprocess_function, enumerate(datasets['test_ind']))) if 'test_ind' in datasets else None
-    #     test_ood_dataset = list(map(preprocess_function, enumerate(datasets['test_ood']))) if 'test_ood' in datasets else None
-    #     test_ind_dataset = [{k:v for k, v in x.items() if k in dataloader_cols} for x in test_ind_dataset]
-    #     if args.max_test_samples is not None:
-    #         test_ind_dataset = test_ind_dataset[:args.max_test_samples]
-    #     test_ood_dataset = [{k:v for k, v in x.items() if k in dataloader_cols} for x in test_ood_dataset]
-    #     if args.max_test_samples is not None:
-    #         test_ood_dataset = test_ood_dataset[:args.max_test_samples]
-        
-    # else:
     processed_datasets = raw_datasets.map(
         preprocess_function,
         batched=True,
@@ -519,10 +523,11 @@ def main():
         test_ood_dataset = processed_datasets['test_ood']
     else:
         test_dataset = processed_datasets["test"]
-
-    # Log a few random samples from the training set:
-    for index in random.sample(range(len(train_dataset)), 1):
-        logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
+        
+    if args.local_rank == 0:
+        # Log a few random samples from the training set:
+        for index in random.sample(range(len(train_dataset)), 1):
+            logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
     if args.pad_to_max_length:
@@ -592,7 +597,7 @@ def main():
     if len(trainable_param_names) > 0:
         for name, param in model.named_parameters():
             # train main model? (== fine-tuning)
-            if name.startswith('deberta') or name.startswith('roberta') or name.startswith('transformer'):
+            if name.startswith('transformer'):
                 param.requires_grad = False
                 for trainable_param_name in trainable_param_names:
                     if trainable_param_name in name:
@@ -625,12 +630,16 @@ def main():
             "weight_decay": 0.0,
         },
     ]
-
+    num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    num_total_params = sum(p.numel() for p in model.parameters())
+    transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
+    logger.info(f'Local rank {args.local_rank}, trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
+    
     if args.local_rank == 0:
-        num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        num_total_params = sum(p.numel() for p in model.parameters())
-        transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
-        logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
+        # num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        # num_total_params = sum(p.numel() for p in model.parameters())
+        # transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
+        # logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
         
         ## Write parameter info ##
         parameter_summary_file = os.path.join(args.output_dir, "parameter_summary.txt")
@@ -815,22 +824,24 @@ def main():
             f.write(f'{(end - start) // 3600}h {((end - start) % 3600) // 60}m {(end - start) % 60}s')
     # load best dev model 
     # TODO: In ZeRO3 load checkpoint after save checkpoint do not work!!
-    if not args.is_zero3:
-        model_engine.load_checkpoint(args.output_dir)
-        model_engine.eval()
-        for step, batch in enumerate(test_dataloader):
-            with torch.no_grad():
-                batch = {k: v.cuda() for k, v in batch.items()}
-                # TODO : fix?
-                _, predictions, _ = model_engine(**batch)
-                metric.add_batch(
-                    predictions=predictions,
-                    references=batch["labels"],
-                )
-        test_metric = metric.compute()
-        if args.local_rank == 0:
-            writer.add_scalar('Test/Accuracy', test_metric['accuracy'])
-            logger.info(f"TEST results {test_metric}")
+    # if not args.is_zero3:
+    #     model_engine.load_checkpoint(args.output_dir)
+    #     model_engine.eval()
+    #     for step, batch in enumerate(test_dataloader):
+    #         with torch.no_grad():
+    #             batch = {k: v.cuda() for k, v in batch.items()}
+    #             # TODO : fix?
+    #             _, predictions, _ = model_engine(**batch)
+    #             metric.add_batch(
+    #                 predictions=predictions,
+    #                 references=batch["labels"],
+    #             )
+    #     test_metric = metric.compute()
+    #     if args.local_rank == 0:
+    #         writer.add_scalar('Test/Accuracy', test_metric['accuracy'])
+    #         if "f1" in test_metric.keys():
+    #             writer.add_scalar('Test/F1', test_metric['f1'], model_engine.global_steps)
+    #         logger.info(f"TEST results {test_metric}")
 
 if __name__ == "__main__":
     main()

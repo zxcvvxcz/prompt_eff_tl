@@ -72,8 +72,8 @@ class OOD(datasets.Metric):
             inputs_description=_KWARGS_DESCRIPTION,
             # This defines the format of each prediction and reference
             features=datasets.Features({
-                'predictions': datasets.Value('float32'),
-                'references': datasets.Value('int8'),
+                'predictions': datasets.Value('int16'),
+                'references': datasets.Value('int16'),
             }),
             # Homepage of the metric for documentation
             homepage="http://metric.homepage",

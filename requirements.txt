@@ -1,3 +1,4 @@
+#nsml: zxcvvxcz/nsml-deepspeed:gpt-Neo-2.7B
 loralib
 # deepspeed
 torch
@@ -6,3 +7,6 @@ scipy
 sklearn
 tensorboard
 sentencepiece
+matplotlib
+nltk
+hydra-core
