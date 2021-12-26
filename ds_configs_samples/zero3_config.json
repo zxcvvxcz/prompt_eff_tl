@@ -16,10 +16,14 @@
     "reduce_bucket_size": 1e7,
     "sub_group_size": 1e9,
     "offload_optimizer": {
-      "device": "cpu"
+      "device": "nvme",
+      "pin_memory": false,
+      "nvme_path": "./nvme_data"
     },
     "offload_param": {
-      "device": "cpu"
+      "device": "nvme",
+      "pin_memory": false,
+      "nvme_path": "./nvme_data"
     }
   }
 }

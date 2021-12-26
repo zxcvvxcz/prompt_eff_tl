@@ -568,8 +568,6 @@ def main():
     
     # Get the metric function
     if args.task_name in intent_tasks:
-        # ood_metric_logits = load_metric('OOD', 'logits', num_process=args.world_size, process_id=args.local_rank)
-        # ood_metric_pooled = load_metric('OOD', 'pooled', num_process=args.world_size, process_id=args.local_rank)
         ood_metric_energy = load_metric('OOD', 'energy', num_process=args.world_size, process_id=args.local_rank)
         ood_metric_softmax = load_metric('OOD', 'softmax', num_process=args.world_size, process_id=args.local_rank)
         ood_metric_maha = load_metric('OOD', 'maha', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list)
@@ -630,16 +628,16 @@ def main():
             "weight_decay": 0.0,
         },
     ]
-    num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    num_total_params = sum(p.numel() for p in model.parameters())
-    transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
-    logger.info(f'Local rank {args.local_rank}, trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
+    # num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # num_total_params = sum(p.numel() for p in model.parameters())
+    # transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
+    # logger.info(f'Local rank {args.local_rank}, trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
     
     if args.local_rank == 0:
-        # num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        # num_total_params = sum(p.numel() for p in model.parameters())
-        # transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
-        # logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
+        num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        num_total_params = sum(p.numel() for p in model.parameters())
+        transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
+        logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
         
         ## Write parameter info ##
         parameter_summary_file = os.path.join(args.output_dir, "parameter_summary.txt")
@@ -667,7 +665,6 @@ def main():
     )
 
     model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, config_params=args.ds_config)
-    # model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, config_params=args.ds_config)
     # Train!
     if args.local_rank == 0:
         total_batch_size = args.per_device_batch_size * args.world_size * args.gradient_accumulation_steps
