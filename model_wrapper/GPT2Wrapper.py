@@ -27,13 +27,13 @@ class GPT2Wrapper(torch.nn.Module):
         self.num_labels = config.num_labels
 
         # for output processing (output logits -> loss, prediction)
-        self.output_processor = BaseOutputProcessor(config=config, embedding_dim=self.embedding_dim, num_labels=self.num_labels)
+        self.output_processor = BaseOutputProcessor(config=config, embedding_dim=self.embedding_dim, num_labels=self.num_labels).to(dtype=torch.float16)
 
         # for other methods (LoRA, Adapter, Prefix-tuning)
         # input_ids -> input_embeds
         if not self.config.apply_input and not self.config.apply_encoder and self.config.prompt_length is None:
             print('get base input processor')
-            self.input_processor = BaseInputProcessor(config=config, embeddings=self.transformer.wte)
+            self.input_processor = BaseInputProcessor(config=config, embeddings=self.transformer.wte).to(dtype=torch.float16)
         # for PROMPT_TUNING
         elif not self.config.apply_input and not self.config.apply_encoder:
             self.input_processor = PromptInputProcessor(config=config, embeddings=self.transformer.wte)

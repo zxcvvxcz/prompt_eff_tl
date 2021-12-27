@@ -13,7 +13,7 @@ class BaseOutputProcessor(torch.nn.Module):
 
         # final layer for prediction
         self.score = torch.nn.Linear(self.embedding_dim, self.num_labels, bias=False)
-        # self.score.to(dtype=torch.half, non_blocking=True)
+        self.score.to(dtype=torch.half, non_blocking=True)
 
     def forward(
         self,
@@ -63,4 +63,4 @@ class BaseOutputProcessor(torch.nn.Module):
         # loss        : (batch, )
         # predictions : (batch, )
         
-        return loss, pooled_logits
+        return loss.to(dtype=torch.float16), pooled_logits.to(dtype=torch.float16)

@@ -20,7 +20,7 @@ from time import time
 
 
 import transformers
-from transformers.deepspeed import HfDeepSpeedConfig
+from transformers.deepspeed import HfDeepSpeedConfig, deepspeed_config
 from transformers import (
     AdamW,
     AutoConfig,
@@ -38,8 +38,11 @@ import deepspeed
 from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
+from transformers import AutoModel, GPT2Tokenizer, GPT2Model, GPTNeoModel
 
 from model_wrapper.GPT2Wrapper import GPT2Wrapper
+from model_wrapper.InputProcessor import *
+from model_wrapper.OutputProcessor import BaseOutputProcessor
 from utils import save_config, set_value_to_shared_json_file, get_value_from_shared_json_file
 
 from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn
@@ -447,11 +450,15 @@ def main():
     
     # TODO : fix?
     if args.is_zero3:
+        zero_init_start_time = time()
         with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
             model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            # model = AutoModel.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
+            # model = BaseInputProcessor(config=config, embeddings=model.wte)
+            print(f"Zero init time: {time() - zero_init_start_time}")
     else:
         model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-
+    # pdb.set_trace()
    # Preprocessing the datasets
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
 
@@ -664,7 +671,7 @@ def main():
         lr_ratio=args.lr_ratio
     )
 
-    model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, config_params=args.ds_config)
+    model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, config=args.ds_config)
     # Train!
     if args.local_rank == 0:
         total_batch_size = args.per_device_batch_size * args.world_size * args.gradient_accumulation_steps

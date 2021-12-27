@@ -1406,9 +1406,9 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             logger.info("Detected DeepSpeed ZeRO-3: activating zero.init() for this model")
             # this immediately partitions the model across all gpus, to avoid the overhead in time
             # and memory copying it on CPU or each GPU first
-            with deepspeed.zero.Init(config_dict_or_path=deepspeed_config()):
-                with no_init_weights(_enable=_fast_init):
-                    model = cls(config, *model_args, **model_kwargs)
+            # with deepspeed.zero.Init(config_dict_or_path=deepspeed_config()):
+            with no_init_weights(_enable=_fast_init):
+                model = cls(config, *model_args, **model_kwargs)
         else:
             with no_init_weights(_enable=_fast_init):
                 model = cls(config, *model_args, **model_kwargs)
