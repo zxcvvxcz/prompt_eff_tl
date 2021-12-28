@@ -36,9 +36,10 @@ import torch
 import torch.nn.functional as F
 import deepspeed
 from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
+from deepspeed.runtime.utils import see_memory_usage
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
-from transformers import AutoModel, GPT2Tokenizer, GPT2Model, GPTNeoModel
+from transformers import AutoModel, GPT2Tokenizer, GPT2Model, GPTNeoModel, GPTJModel, T5Tokenizer, T5Model
 
 from model_wrapper.GPT2Wrapper import GPT2Wrapper
 from model_wrapper.InputProcessor import *
@@ -451,15 +452,17 @@ def main():
     # TODO : fix?
     if args.is_zero3:
         zero_init_start_time = time()
+        see_memory_usage('Before zero init', True)
         with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
             model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
             # model = AutoModel.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
             # model = BaseInputProcessor(config=config, embeddings=model.wte)
-            print(f"Zero init time: {time() - zero_init_start_time}")
+        print(f"Zero init time: {time() - zero_init_start_time}")
     else:
         model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
     # pdb.set_trace()
    # Preprocessing the datasets
+    see_memory_usage('After init', True)
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
 
     # Some models have set the order of the labels to use, so let's make sure we do use it.
@@ -670,8 +673,11 @@ def main():
         num_training_steps=args.max_train_steps,
         lr_ratio=args.lr_ratio
     )
-
+    see_memory_usage('Before model engine', True)
     model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, config=args.ds_config)
+    see_memory_usage('After model engine', True)
+    # del model
+    # see_memory_usage('After delete model', True)
     # Train!
     if args.local_rank == 0:
         total_batch_size = args.per_device_batch_size * args.world_size * args.gradient_accumulation_steps

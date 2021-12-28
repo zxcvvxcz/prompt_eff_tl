@@ -4,6 +4,7 @@ import pdb
 import torch
 
 from transformers import AutoModel
+from deepspeed.runtime.utils import see_memory_usage
 
 from .InputProcessor import *
 from .OutputProcessor import BaseOutputProcessor
@@ -18,6 +19,7 @@ class GPT2Wrapper(torch.nn.Module):
         
         self.get_last_hidden_state = get_last_hidden_state
         # Main model
+        see_memory_usage('No model initialized', True)
         self.transformer = AutoModel.from_pretrained(
                                         model_name_or_path,
                                         from_tf=bool(".ckpt" in model_name_or_path),
@@ -25,15 +27,17 @@ class GPT2Wrapper(torch.nn.Module):
 
         self.embedding_dim = self.transformer.wte.embedding_dim
         self.num_labels = config.num_labels
+        see_memory_usage('Transformer initialized', True)
 
         # for output processing (output logits -> loss, prediction)
-        self.output_processor = BaseOutputProcessor(config=config, embedding_dim=self.embedding_dim, num_labels=self.num_labels).to(dtype=torch.float16)
+        self.output_processor = BaseOutputProcessor(config=config, embedding_dim=self.embedding_dim, num_labels=self.num_labels)
 
+        see_memory_usage('output_processor initialized', True)
         # for other methods (LoRA, Adapter, Prefix-tuning)
         # input_ids -> input_embeds
         if not self.config.apply_input and not self.config.apply_encoder and self.config.prompt_length is None:
             print('get base input processor')
-            self.input_processor = BaseInputProcessor(config=config, embeddings=self.transformer.wte).to(dtype=torch.float16)
+            self.input_processor = BaseInputProcessor(config=config, embeddings=self.transformer.wte)
         # for PROMPT_TUNING
         elif not self.config.apply_input and not self.config.apply_encoder:
             self.input_processor = PromptInputProcessor(config=config, embeddings=self.transformer.wte)
@@ -44,6 +48,7 @@ class GPT2Wrapper(torch.nn.Module):
         elif self.config.apply_input and self.config.apply_encoder:
             self.input_processor = EncoderInputProcessor(config=config, embeddings=self.transformer.wte)
 
+        see_memory_usage('input_processor initialized', True)
     def forward(
         self,
         input_ids=None,
