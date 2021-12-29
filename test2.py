@@ -3,7 +3,7 @@ from transformers.deepspeed import HfDeepSpeedConfig
 import argparse
 import torch
 from model_wrapper.GPT2Wrapper import GPT2Wrapper
-import deepspeed
+# import deepspeed
 from deepspeed.runtime.zero.stage_1_and_2 import estimate_zero2_model_states_mem_needs_all_live
 from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 
@@ -16,10 +16,8 @@ parser.add_argument(
 )
 # model = AutoModel.from_pretrained("gpt2-medium")
 args = parser.parse_args()
-deepspeed.init_distributed()
-ds_config = 'ds_configs_samples/zero3_config_no_offload.json'
-vxzcvc = HfDeepSpeedConfig(ds_config)
-model_name = 'EleutherAI/gpt-neo-2.7B'
+ds_config = 'ds_configs_samples/zero3_config.json'
+model_name = 't5-11b'
 cache_dir = '/home/pch330/data/model_data'
 tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
 
@@ -32,8 +30,7 @@ config = AutoConfig.from_pretrained(model_name, num_labels=151,
     )
 
 # model = GPT2Wrapper(config=config, model_name_or_path='gpt2-medium', get_last_hidden_state=True)
-with deepspeed.zero.Init(config_dict_or_path=ds_config):
-    model = GPT2Wrapper(config=config, model_name_or_path=model_name, cache_dir=cache_dir)
+model = GPT2Wrapper(config=config, model_name_or_path=model_name, cache_dir=cache_dir)
 
 # for p in model.parameters():
 #     print(p.shape)

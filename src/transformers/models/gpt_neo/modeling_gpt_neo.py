@@ -332,8 +332,7 @@ class GPTNeoBlock(nn.Module):
         self.attn = GPTNeoAttention(config, layer_id)
         self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.mlp = GPTNeoMLP(inner_dim, config)
-
-
+        
         #! HS
         if config.apply_adapter:
             self.adapter1 = Adapter(hidden_size, config.adapter_size, 'relu')
@@ -364,7 +363,7 @@ class GPTNeoBlock(nn.Module):
 
         #! HS
         if hasattr(self, 'adapter1'):
-            hidden_states = self.adapter1(attn_output) + residual
+            hidden_states = self.adapter1(attn_output, residual) #! CH
         else:
             hidden_states = residual + attn_output
         #! HS
@@ -380,7 +379,7 @@ class GPTNeoBlock(nn.Module):
 
         #! HS
         if hasattr(self, 'adapter2'):
-            hidden_states = self.adapter2(feed_forward_hidden_states) + residual
+            hidden_states = self.adapter2(feed_forward_hidden_states, residual) #! CH
         else:
             hidden_states = residual + feed_forward_hidden_states
         #! HS

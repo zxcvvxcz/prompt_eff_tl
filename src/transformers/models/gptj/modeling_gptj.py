@@ -278,6 +278,7 @@ class GPTJMLP(nn.Module):
 class GPTJBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
+        hidden_size = config.hidden_size #! CH
         inner_dim = config.n_inner if config.n_inner is not None else 4 * config.n_embd
         self.ln_1 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.attn = GPTJAttention(config)
@@ -312,17 +313,17 @@ class GPTJBlock(nn.Module):
         attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
         outputs = attn_outputs[1:]
 
-        #! HS
+        #! HS  #! CH
         if hasattr(self, 'adapter1'):
-            attn_output = self.adapter1(attn_output)
-        #! HS
+            attn_output = self.adapter1(attn_output, residual)
+        #! HS  #! CH
 
         feed_forward_hidden_states = self.mlp(hidden_states)
         
-        #! HS
+        #! HS  #! CH
         if hasattr(self, 'adapter2'):
-            feed_forward_hidden_states = self.adapter2(feed_forward_hidden_states)
-        #! HS
+            feed_forward_hidden_states = self.adapter2(feed_forward_hidden_states, residual)
+        #! HS  #! CH
         
         hidden_states = attn_output + feed_forward_hidden_states + residual
 
