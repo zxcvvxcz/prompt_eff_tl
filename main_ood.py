@@ -461,7 +461,7 @@ def main():
         apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, 
         reparameterize=args.reparameterize,
     )
-    
+    torch.distributed.barrier()
     # TODO : fix?
     if args.is_zero3:
         zero_init_start_time = time()
@@ -476,6 +476,8 @@ def main():
     # pdb.set_trace()
    # Preprocessing the datasets
     see_memory_usage('After init', True)
+    if args.local_rank == 0:
+        print(model.config)
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
 
     # Some models have set the order of the labels to use, so let's make sure we do use it.
@@ -711,7 +713,17 @@ def main():
     save_flag = False
     patience = 0
     EARLY_STOP = 5
-    log_path = os.path.join(args.output_dir,'eval_result.tsv')
+    log_tsv_name = f'eval_result_{args.lr}'
+    if args.apply_prefix:
+        log_tsv_name += f'num_prefix_{args.num_prefix}_mid_dim_{args.mid_dim}'
+    elif args.apply_adapter:
+        log_tsv_name += f'adapter_size_{args.adapter_size}'
+    elif args.apply_lora:
+        log_tsv_name += f'lora_r_{args.lora_r}_lora_alpha_{args.lora_alpha}'
+    else:
+        log_tsv_name += f'fine_tune'
+    log_tsv_name += '.tsv'
+    log_path = os.path.join(args.output_dir, log_tsv_name)
     
     for epoch in range(args.num_train_epochs):
         model_engine.train()
