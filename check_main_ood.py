@@ -341,7 +341,38 @@ def main():
     dschf = HfDeepSpeedConfig(args.ds_config)
     deepspeed.init_distributed()
     args.world_size = torch.distributed.get_world_size()
-
+    print('DEBUG A')
+    # Load pretrained model and tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir,)
+    print('DEBUG tokenizer')
+    # For gpt-2
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.unk_token
+    # TODO: only inject pad_token_id in case of GPT
+    config = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=150, 
+        finetuning_task=args.task_name, pad_token_id=tokenizer.unk_token_id,
+        apply_lora=args.apply_lora, lora_alpha=args.lora_alpha, lora_r=args.lora_r,
+        apply_prefix=args.apply_prefix, num_prefix=args.num_prefix, mid_dim=args.mid_dim,
+        apply_encoder=args.apply_encoder, apply_input=args.apply_input, encoder_model_name_or_path=args.encoder_model_name_or_path,
+        freeze_encoder=args.freeze_encoder, prompt_length=args.prompt_length, 
+        apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, 
+        reparameterize=args.reparameterize,
+    )
+    print('DEBUG config')
+    # TODO : fix?
+    if args.is_zero3:
+        zero_init_start_time = time()
+        see_memory_usage('Before zero init', True)
+        with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
+            
+            # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            # model = AutoModel.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
+            # model = BaseInputProcessor(config=config, embeddings=model.wte)
+        print(f"Zero init time: {time() - zero_init_start_time}")
+    else:
+        model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+    print('DEBUG model')
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -447,36 +478,7 @@ def main():
         label_list.sort()  # Let's sort it for determinism
         num_labels = len(label_list)
 
-    # Load pretrained model and tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir,)
-    # For gpt-2
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.unk_token
-    # TODO: only inject pad_token_id in case of GPT
-    config = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels, 
-        finetuning_task=args.task_name, pad_token_id=tokenizer.unk_token_id,
-        apply_lora=args.apply_lora, lora_alpha=args.lora_alpha, lora_r=args.lora_r,
-        apply_prefix=args.apply_prefix, num_prefix=args.num_prefix, mid_dim=args.mid_dim,
-        apply_encoder=args.apply_encoder, apply_input=args.apply_input, encoder_model_name_or_path=args.encoder_model_name_or_path,
-        freeze_encoder=args.freeze_encoder, prompt_length=args.prompt_length, 
-        apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, 
-        reparameterize=args.reparameterize,
-    )
-    torch.distributed.barrier()
-    # TODO : fix?
-    if args.is_zero3:
-        zero_init_start_time = time()
-        see_memory_usage('Before zero init', True)
-        with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
-            
-            # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-            model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-            # model = AutoModel.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
-            # model = BaseInputProcessor(config=config, embeddings=model.wte)
-        print(f"Zero init time: {time() - zero_init_start_time}")
-    else:
-        model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-
+    
         # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
     # pdb.set_trace()
    # Preprocessing the datasets

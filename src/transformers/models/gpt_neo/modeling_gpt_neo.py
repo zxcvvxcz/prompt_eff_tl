@@ -363,7 +363,7 @@ class GPTNeoBlock(nn.Module):
 
         #! HS
         if hasattr(self, 'adapter1'):
-            hidden_states = self.adapter1(attn_output, residual) #! CH
+            hidden_states = self.adapter1(attn_output) + residual
         else:
             hidden_states = residual + attn_output
         #! HS
@@ -379,7 +379,7 @@ class GPTNeoBlock(nn.Module):
 
         #! HS
         if hasattr(self, 'adapter2'):
-            hidden_states = self.adapter2(feed_forward_hidden_states, residual) #! CH
+            hidden_states = self.adapter2(feed_forward_hidden_states) + residual
         else:
             hidden_states = residual + feed_forward_hidden_states
         #! HS

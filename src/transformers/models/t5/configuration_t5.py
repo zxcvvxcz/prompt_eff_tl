@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 from transformers import PreTrainedTokenizer, TensorType
 
 from ... import is_torch_available
+# from ...adapters.model_mixin import ModelConfigAdaptersMixin
 from ...configuration_utils import PretrainedConfig
 from ...onnx import OnnxConfigWithPast
 from ...utils import logging
@@ -100,6 +101,20 @@ class T5Config(PretrainedConfig):
         use_cache=True,
         pad_token_id=0,
         eos_token_id=1,
+        apply_lora=False,
+        lora_alpha=None,
+        lora_r=None,
+        apply_adapter=False,
+        adapter_type=None,
+        adapter_size=None,
+        apply_prefix=False,
+        num_prefix=0,
+        mid_dim=0,
+        apply_encoder=False,
+        apply_input=False,
+        encoder_model_name_or_path=None,
+        freeze_encoder=False,
+        prompt_length=None,
         **kwargs
     ):
         self.vocab_size = vocab_size
@@ -117,6 +132,29 @@ class T5Config(PretrainedConfig):
         self.initializer_factor = initializer_factor
         self.feed_forward_proj = feed_forward_proj
         self.use_cache = use_cache
+
+        # for LoRA
+        self.apply_lora=apply_lora
+        self.lora_alpha=lora_alpha
+        self.lora_r=lora_r
+
+        # for adapter
+        self.apply_adapter=apply_adapter
+        self.adapter_type=adapter_type
+        self.adapter_size=adapter_size
+
+        # for prefix-tuning
+        self.apply_prefix=apply_prefix
+        self.num_prefix=num_prefix
+        self.mid_dim=mid_dim
+
+        # for OUR method
+        self.apply_encoder=apply_encoder
+        self.apply_input=apply_input
+        self.encoder_model_name_or_path=encoder_model_name_or_path
+        self.freeze_encoder=freeze_encoder
+        self.prompt_length=prompt_length
+
         super().__init__(
             pad_token_id=pad_token_id,
             eos_token_id=eos_token_id,
