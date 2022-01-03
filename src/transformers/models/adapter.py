@@ -9,8 +9,15 @@ class Adapter(nn.Module):
         self.act = get_activation(act)
         self.adapter_B = nn.Linear(r, dim)
 
-    def forward(self, x, residual):
+    def forward(self, x, residual = 0):
         result = self.adapter_A(x)
         result = self.act(result)
         result = self.adapter_B(result)
-        return result + residual
+        
+        #! raw
+        # return result + residual
+        #! raw
+        
+        #! HS
+        return result + x
+        #! HS

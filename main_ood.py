@@ -170,7 +170,7 @@ def parse_args():
     parser.add_argument(
         "--seed", 
         type=int, 
-        default=None, 
+        default=42, 
         help="A seed for reproducible training."
     )
     parser.add_argument(
@@ -462,21 +462,25 @@ def main():
         apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, 
         reparameterize=args.reparameterize,
     )
-    torch.distributed.barrier()
     # TODO : fix?
     if args.is_zero3:
         zero_init_start_time = time()
         see_memory_usage('Before zero init', True)
         with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
-            
-            # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-            model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            if 't5' in args.model_name_or_path:
+                model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            else:
+                model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            # model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
             # model = AutoModel.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
             # model = BaseInputProcessor(config=config, embeddings=model.wte)
         print(f"Zero init time: {time() - zero_init_start_time}")
     else:
-        model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-
+        if 't5' in args.model_name_or_path:
+            model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+        else:
+            model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            
         # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
     # pdb.set_trace()
    # Preprocessing the datasets
