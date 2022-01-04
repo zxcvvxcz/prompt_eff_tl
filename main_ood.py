@@ -113,6 +113,22 @@ def parse_args():
         required=True,
     )
     parser.add_argument(
+        "--load_init_model",
+        action="store_true",
+        help="If passed, initialize model from zero checkpoint.",
+    )
+    parser.add_argument(
+        "--save_init_model",
+        action="store_true",
+        help="If passed, save initial model as zero checkpoint.",
+    )
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        default=os.path.join("ckpt"),
+        help="If passed, save initial model as zero checkpoint.",
+    )
+    parser.add_argument(
         "--lr",
         type=float,
         default=5e-5,
@@ -468,18 +484,20 @@ def main():
         see_memory_usage('Before zero init', True)
         with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
             if 't5' in args.model_name_or_path:
-                model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+                model = T5EncWrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                    args.load_init_model, args.ckpt_path)
             else:
-                model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-            # model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-            # model = AutoModel.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
-            # model = BaseInputProcessor(config=config, embeddings=model.wte)
+                model = GPT2Wrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                    args.load_init_model, args.ckpt_path)
+           
         print(f"Zero init time: {time() - zero_init_start_time}")
     else:
         if 't5' in args.model_name_or_path:
-            model = T5EncWrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            model = T5EncWrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                args.load_init_model, args.ckpt_path)
         else:
-            model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+            model = GPT2Wrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                args.load_init_model, args.ckpt_path)
             
         # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
     # pdb.set_trace()
@@ -695,6 +713,12 @@ def main():
     )
     see_memory_usage('Before model engine', True)
     model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, config=args.ds_config)
+    if args.load_init_model:
+        load_path, client_sd = model_engine.load_checkpoint(args.ckpt_path)
+        print(f'Loaded initial model from {load_path}')
+    if args.save_init_model:
+        model_engine.save_checkpoint(args.ckpt_path)
+        print(f'Saved initial model in {load_path}')
     see_memory_usage('After model engine', True)
     # pdb.set_trace()
     # del model
@@ -718,7 +742,7 @@ def main():
     # # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=(args.local_rank != 0))
     completed_steps = 0
-    best_maha_auroc = 0
+    best_acc = 0
     save_flag = False
     patience = 0
     EARLY_STOP = 5
@@ -846,8 +870,8 @@ def main():
         metric_df = pd.read_csv(log_path, delimiter='\t', header=0)
         print(metric_df['AUROC(maha)'])
         print(metric_df['AUROC(maha)'].iloc[-1])
-        if metric_df['AUROC(maha)'].iloc[-1] > best_maha_auroc:
-            best_maha_auroc = metric_df['AUROC(maha)'].iloc[-1]
+        if metric_df['accuracy'].iloc[-1] > best_acc:
+            best_acc = metric_df['accuracy'].iloc[-1]
             save_flag = True      
             patience = 0      
         else:

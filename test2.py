@@ -17,7 +17,7 @@ parser.add_argument(
 # model = AutoModel.from_pretrained("gpt2-medium")
 args = parser.parse_args()
 ds_config = 'ds_configs_samples/zero3_config.json'
-model_name = 't5-11b'
+model_name = 'EleutherAI/gpt-j-6B'
 cache_dir = '/home/pch330/data/model_data'
 tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
 
@@ -37,4 +37,4 @@ model = GPT2Wrapper(config=config, model_name_or_path=model_name, cache_dir=cach
 
 
 
-estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=1, num_nodes=1)
+estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=8, num_nodes=1)

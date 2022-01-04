@@ -12,7 +12,7 @@ from .OutputProcessor import BaseOutputProcessor
 
 
 class GPT2Wrapper(torch.nn.Module):
-    def __init__(self, config, model_name_or_path, cache_dir=None, get_last_hidden_state=False):
+    def __init__(self, config, model_name_or_path, cache_dir=None, get_last_hidden_state=False, load_init_model=False, ckpt_path=None):
         super(GPT2Wrapper, self).__init__()
 
         self.config = config
@@ -20,10 +20,13 @@ class GPT2Wrapper(torch.nn.Module):
         self.get_last_hidden_state = get_last_hidden_state
         # Main model
         see_memory_usage('No model initialized', True)
-        self.transformer = AutoModel.from_pretrained(
-                                        model_name_or_path,
-                                        from_tf=bool(".ckpt" in model_name_or_path),
-                                        config=config, cache_dir=cache_dir)
+        if load_init_model:
+            self.transformer = AutoModel.from_config(config)
+        else:
+            self.transformer = AutoModel.from_pretrained(
+                                            model_name_or_path,
+                                            from_tf=bool(".ckpt" in model_name_or_path),
+                                            config=config, cache_dir=cache_dir)
 
         self.embedding_dim = self.transformer.wte.embedding_dim
         self.num_labels = config.num_labels
