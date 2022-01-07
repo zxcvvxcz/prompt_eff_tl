@@ -283,7 +283,7 @@ def prepare_ood(model_engine, dataloader, config):
     # class_mean = torch.zeros(max(label_id_list) + 1, d).cuda()
     for c in all_classes:
         class_mean[c] = (bank[label_bank == c].mean(0))
-    centered_bank = (bank - class_mean[label_bank]).detach().cpu().numpy()
+    centered_bank = (bank - class_mean[label_bank]).detach().cpu().numpy() + 1e-12
     precision = LedoitWolf().fit(centered_bank).precision_.astype(np.float32)
     class_var = torch.from_numpy(precision).float().cuda()
     print("Preparation for OOD done...")

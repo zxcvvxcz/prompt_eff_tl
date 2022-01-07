@@ -5,6 +5,8 @@ import math
 import os
 import random
 import json
+import gc
+import psutil
 from pathlib import Path
 from functools import partial
 import pdb
@@ -35,6 +37,7 @@ from transformers import (
 import torch
 import torch.nn.functional as F
 import deepspeed
+from deepspeed.runtime.utils import see_memory_usage
 from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 from deepspeed.runtime.utils import see_memory_usage
 from torch.utils.data.distributed import DistributedSampler
@@ -591,6 +594,7 @@ def main():
 
     train_sampler = DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, collate_fn=data_collator, batch_size=args.per_device_batch_size)
+    maha_dataloader = DataLoader(train_dataset, shuffle=False, collate_fn=data_collator, batch_size=args.per_device_batch_size)
     if args.task_name in intent_tasks:
         test_ind_sampler = DistributedSampler(test_ind_dataset)
         test_ind_dataloader = DataLoader(test_ind_dataset, sampler=test_ind_sampler, collate_fn=data_collator, batch_size=args.per_device_batch_size, shuffle=False)       
@@ -784,7 +788,8 @@ def main():
         model_engine.eval()    
         if args.task_name in intent_tasks:
             # if args.local_rank == 0:
-            class_mean, class_var, norm_bank = prepare_ood(model_engine, train_dataloader, config)
+            # class_mean, class_var, norm_bank = prepare_ood(model_engine, train_dataloader, config)
+            class_mean, class_var, norm_bank = prepare_ood(model_engine, maha_dataloader, config)
         
             for step, batch in enumerate(test_ind_dataloader):
                 with torch.no_grad():
@@ -907,6 +912,39 @@ def main():
     #         if "f1" in test_metric.keys():
     #             writer.add_scalar('Test/F1', test_metric['f1'], model_engine.global_steps)
     #         logger.info(f"TEST results {test_metric}")
+
+
+def my_see_memory_usage(message):
+
+    # python doesn't do real-time garbage collection so do it explicitly to get the correct RAM reports
+    gc.collect()
+
+    # Print message except when distributed but not rank 0
+    
+    if hasattr(torch.cuda, "memory_reserved"):
+        torch_memory_reserved = torch.cuda.memory_reserved
+    else:
+        torch_memory_reserved = torch.cuda.memory_allocated
+    if hasattr(torch.cuda, "max_memory_reserved"):
+        torch_max_memory_reserved = torch.cuda.max_memory_reserved
+    else:
+        torch_max_memory_reserved = torch.cuda.memory_cached
+    logger.info(message)
+    logger.info(
+        f"MA {round(torch.cuda.memory_allocated() / (1024 * 1024 * 1024),2 )} GB \
+        Max_MA {round(torch.cuda.max_memory_allocated() / (1024 * 1024 * 1024),2)} GB \
+        CA {round(torch_memory_reserved() / (1024 * 1024 * 1024),2)} GB \
+        Max_CA {round(torch_max_memory_reserved() / (1024 * 1024 * 1024))} GB ")
+
+    vm_stats = psutil.virtual_memory()
+    used_GB = round(((vm_stats.total - vm_stats.available) / (1024**3)), 2)
+    logger.info(
+        f'CPU Virtual Memory:  used = {used_GB} GB, percent = {vm_stats.percent}%')
+
+    # get the peak memory to report correct data, so reset the counter for the next call
+    if hasattr(torch.cuda, "reset_peak_memory_stats"):  # pytorch 1.4+
+        torch.cuda.reset_peak_memory_stats()
+
 
 if __name__ == "__main__":
     main()

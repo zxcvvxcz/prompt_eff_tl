@@ -136,3 +136,6 @@ model_data*
 test_output
 outputs
 *.txt
+.nv
+.bash_history
+.python_history
