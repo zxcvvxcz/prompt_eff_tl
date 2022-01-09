@@ -69,7 +69,7 @@ class BaseOutputProcessor(torch.nn.Module):
 
 class T5OutputProcessor(torch.nn.Module):
     def __init__(self, config, embedding_dim, num_labels):
-        super(BaseOutputProcessor, self).__init__()
+        super(T5OutputProcessor, self).__init__()
 
         self.config = config
         self.embedding_dim = embedding_dim

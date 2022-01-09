@@ -346,7 +346,12 @@ def parse_args():
     with open(args.ds_config, "r", encoding="utf-8") as ds_f:
         ds_config = json.load(ds_f)
     args.per_device_batch_size = ds_config['train_micro_batch_size_per_gpu']
-    args.gradient_accumulation_steps = ds_config['gradient_accumulation_steps']
+    if args.gradient_accumulation_steps != ds_config['gradient_accumulation_steps']:
+        print('gradient_accumulation_steps mismatch!')
+        if args.gradient_accumulation_steps == 1 or ds_config['gradient_accumulation_steps'] != 1:
+            args.gradient_accumulation_steps = ds_config['gradient_accumulation_steps']
+        else:
+            ds_config['gradient_accumulation_steps'] = args.gradient_accumulation_steps
     if ds_config.get("zero_optimization"):
         args.is_zero3 = ds_config["zero_optimization"]["stage"] == 3
     else:

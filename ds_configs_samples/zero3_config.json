@@ -5,7 +5,7 @@
   "reduce_bucket_size": 2e8,
   "steps_per_print":50000,
   "fp16": {
-    "enabled": false
+    "enabled": "auto"
   },
   "zero_allow_untested_optimizer": true,
   "zero_optimization": {
