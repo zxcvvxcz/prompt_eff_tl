@@ -349,7 +349,189 @@ def preprocess_dataset_for_transformers(dataset):
     
     datasets = {'train': transfrom_data_dict(dataset['train']), 'validation': transfrom_data_dict(dataset['validation']), 
                 'test_ind': transfrom_data_dict(dataset['test_ind']), 'test_ood': transfrom_data_dict(dataset['test_ood'])}
-
-
-    
+   
     return datasets
+
+
+def check_ood_eval_condition(args, curr_acc):
+    # parameter efficiency 기준 부정확하므로 주의
+    model_name = args.model_name_or_path
+    task_name = args.task_name
+    split_ratio = args.split_ratio
+    split = args.split
+    # is_best = (best_acc <= curr_acc) or (best_maha_acc <= curr_maha_acc)
+    ood_threshold = 0
+    if args.apply_adapter == True:
+        if 'gpt-j-6B' in model_name:
+            param_ratio = 0.1 if args.adapter_size < 62 else 1
+            if task_name == 'banking77': # banking, 25
+                assert split, 'banking77 must be split!'
+                ood_threshold = 96 if param_ratio == 0.1 else 96
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25: # clinc, 25
+                    ood_threshold = 98 if param_ratio == 0.1 else 99
+                elif split == False: # clinc full
+                    ood_threshold = 93 if param_ratio == 0.1 else 96
+        elif 'gpt-neo-2.7B' in model_name:
+            param_ratio = 0.1 if args.adapter_size < 39 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 96 if param_ratio == 0.1 else 96
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 98 if param_ratio == 0.1 else 99
+                elif split == False:
+                    ood_threshold = 93 if param_ratio == 0.1 else 96
+            
+        elif 't5-3b' in model_name:
+            param_ratio = 0.1 if args.adapter_size < 39 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 95 if param_ratio == 0.1 else 95
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 95 if param_ratio == 0.1 else 95
+                elif split == False:
+                    ood_threshold = 92 if param_ratio == 0.1 else 92
+            
+        elif 't5-11b' in model_name:
+            param_ratio = 0.1 if args.adapter_size < 124 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 95 if param_ratio == 0.1 else 95
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 95 if param_ratio == 0.1 else 95
+                elif split == False:
+                    ood_threshold = 92 if param_ratio == 0.1 else 92
+            
+    elif args.apply_lora == True:
+        if 'gpt-j-6B' in model_name:
+            param_ratio = 0.1 if args.lora_r < 64 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 97 if param_ratio == 0.1 else 97
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 98 if param_ratio == 0.1 else 98
+                elif split == False:
+                    ood_threshold = 96 if param_ratio == 0.1 else 96
+            
+        elif 'gpt-neo-2.7B' in model_name:
+            param_ratio = 0.1 if args.lora_r < 40 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 97 if param_ratio == 0.1 else 97
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 98 if param_ratio == 0.1 else 98
+                elif split == False:
+                    ood_threshold = 96 if param_ratio == 0.1 else 96
+            
+        elif 't5-3b' in model_name:
+            param_ratio = 0.1 if args.lora_r < 64 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 96 if param_ratio == 0.1 else 96
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 97 if param_ratio == 0.1 else 97
+                elif split == False:
+                    ood_threshold = 95 if param_ratio == 0.1 else 95
+            
+        elif 't5-11b' in model_name:
+            param_ratio = 0.1 if args.lora_r < 100 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 96 if param_ratio == 0.1 else 96
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 97 if param_ratio == 0.1 else 97
+                elif split == False:
+                    ood_threshold = 95 if param_ratio == 0.1 else 95
+        
+    elif args.apply_prefix == True:
+        if 'gpt-j-6B' in model_name:
+            param_ratio = 0.1 if args.mid_dim < 120 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 90 if param_ratio == 0.1 else 90
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 90 if param_ratio == 0.1 else 90
+                elif split == False:
+                    ood_threshold = 90 if param_ratio == 0.1 else 90
+            
+        elif 'gpt-neo-2.7B' in model_name:
+            param_ratio = 0.1 if args.mid_dim < 76 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 90 if param_ratio == 0.1 else 90
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 90 if param_ratio == 0.1 else 90
+                elif split == False:
+                    ood_threshold = 90 if param_ratio == 0.1 else 90
+            
+        elif 't5-3b' in model_name:
+            param_ratio = 0.1 if args.mid_dim < 76 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 90 if param_ratio == 0.1 else 90
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 90 if param_ratio == 0.1 else 90
+                elif split == False:
+                    ood_threshold = 90 if param_ratio == 0.1 else 90
+            
+        elif 't5-11b' in model_name:
+            param_ratio = 0.1 if args.mid_dim < 200 else 1
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 90 if param_ratio == 0.1 else 90
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 90 if param_ratio == 0.1 else 90
+                elif split == False:
+                    ood_threshold = 90 if param_ratio == 0.1 else 90
+        
+    else: # fine tuning, no param ratio
+        if 'gpt-j-6B' in model_name:
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 97.2
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 99
+                elif split == False:
+                    ood_threshold = 96.5        
+        elif 'gpt-neo-2.7B' in model_name:
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 96.6
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 98
+                elif split == False:
+                    ood_threshold = 96.6
+            
+        elif 't5-3b' in model_name:
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 96.6
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 98
+                elif split == False:
+                    ood_threshold = 96.6
+            
+        elif 't5-11b' in model_name:
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 96.6
+            elif task_name == 'clinc150': 
+                if split == True and split_ratio == 0.25:
+                    ood_threshold = 98
+                elif split == False:
+                    ood_threshold = 96.6
+    return (curr_acc >= ood_threshold)

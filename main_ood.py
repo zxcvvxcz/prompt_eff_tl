@@ -50,7 +50,7 @@ from model_wrapper.InputProcessor import *
 from model_wrapper.OutputProcessor import BaseOutputProcessor
 from utils import save_config, set_value_to_shared_json_file, get_value_from_shared_json_file
 
-from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn
+from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn, check_ood_eval_condition
 from ood_eval import prepare_ood, get_maha_embedding
 logger = logging.getLogger(__name__)
 start = time()
@@ -794,76 +794,84 @@ def main():
         if args.task_name in intent_tasks:
             # if args.local_rank == 0:
             # class_mean, class_var, norm_bank = prepare_ood(model_engine, train_dataloader, config)
-            class_mean, class_var, norm_bank = prepare_ood(model_engine, maha_dataloader, config)
-        
             for step, batch in enumerate(test_ind_dataloader):
                 with torch.no_grad():
                     batch = {k: v.cuda() for k, v in batch.items()}
                     loss, logits, last_hidden = model_engine(**batch)
                     predictions = logits.argmax(dim=-1)
-                    pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
-                    ood_labels = torch.ones_like(predictions)
-                    softmax_score = F.softmax(logits, dim=-1).max(-1)[0]
-                    maha_score = []
-
-                    for c in label_id_list:
-                        centered_pooled = pooled - class_mean[c].unsqueeze(0)
-                        ms = torch.diag(centered_pooled @ class_var @ centered_pooled.t())
-                        maha_score.append(ms)
-                    maha_score = torch.stack(maha_score, dim=-1)
-
-                    maha_score, pred = maha_score.min(-1)
-                    maha_score = -maha_score
-
-                    norm_pooled = F.normalize(pooled, dim=-1)
-                    cosine_score = norm_pooled @ norm_bank.t()
-                    cosine_score = cosine_score.max(-1)[0]
-
-                    energy_score = torch.logsumexp(logits, dim=-1)
-                    ood_metric_softmax.add_batch(predictions=softmax_score, references=ood_labels,)
-                    ood_metric_maha.add_batch(predictions=maha_score, references=ood_labels,)
-                    ood_metric_cosine.add_batch(predictions=cosine_score, references=ood_labels,)
-                    ood_metric_energy.add_batch(predictions=energy_score, references=ood_labels,)
                     ind_metric.add_batch(predictions=predictions, references=batch["labels"],)
-                    ind_metric_maha.add_batch(predictions=pred, references=batch["labels"],)
-                    
-            for step, batch in enumerate(test_ood_dataloader):
-                with torch.no_grad():        
-                    batch['labels'] = torch.zeros_like(batch['labels'])
-                    batch = {k: v.cuda() for k, v in batch.items()}   
-                    # pdb.set_trace()            
-                    loss, logits, last_hidden = model_engine(**batch)
-                    predictions = logits.argmax(dim=-1)
-                    pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
-                    ood_labels = torch.zeros_like(predictions)
-                    softmax_score = F.softmax(logits, dim=-1).max(-1)[0]
-                    maha_score = []
+            eval_metric = ind_metric.compute()
+            if check_ood_eval_condition(args, eval_metric['accuracy']):
+                class_mean, class_var, norm_bank = prepare_ood(model_engine, maha_dataloader, config)
+            
+                for step, batch in enumerate(test_ind_dataloader):
+                    with torch.no_grad():
+                        batch = {k: v.cuda() for k, v in batch.items()}
+                        loss, logits, last_hidden = model_engine(**batch)
+                        predictions = logits.argmax(dim=-1)
+                        pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
+                        ood_labels = torch.ones_like(predictions)
+                        softmax_score = F.softmax(logits, dim=-1).max(-1)[0]
+                        maha_score = []
 
-                    for c in label_id_list:
-                        centered_pooled = pooled - class_mean[c].unsqueeze(0)
-                        ms = torch.diag(centered_pooled @ class_var @ centered_pooled.t())
-                        maha_score.append(ms)
-                    maha_score = torch.stack(maha_score, dim=-1)
+                        for c in label_id_list:
+                            centered_pooled = pooled - class_mean[c].unsqueeze(0)
+                            ms = torch.diag(centered_pooled @ class_var @ centered_pooled.t())
+                            maha_score.append(ms)
+                        maha_score = torch.stack(maha_score, dim=-1)
 
-                    maha_score, pred = maha_score.min(-1)
-                    maha_score = -maha_score
+                        maha_score, pred = maha_score.min(-1)
+                        maha_score = -maha_score
 
-                    norm_pooled = F.normalize(pooled, dim=-1)
-                    cosine_score = norm_pooled @ norm_bank.t()
-                    cosine_score = cosine_score.max(-1)[0]
+                        norm_pooled = F.normalize(pooled, dim=-1)
+                        cosine_score = norm_pooled @ norm_bank.t()
+                        cosine_score = cosine_score.max(-1)[0]
 
-                    energy_score = torch.logsumexp(logits, dim=-1)
+                        energy_score = torch.logsumexp(logits, dim=-1)
+                        ood_metric_softmax.add_batch(predictions=softmax_score, references=ood_labels,)
+                        ood_metric_maha.add_batch(predictions=maha_score, references=ood_labels,)
+                        ood_metric_cosine.add_batch(predictions=cosine_score, references=ood_labels,)
+                        ood_metric_energy.add_batch(predictions=energy_score, references=ood_labels,)
+                        ind_metric.add_batch(predictions=predictions, references=batch["labels"],)
+                        ind_metric_maha.add_batch(predictions=pred, references=batch["labels"],)
+                        
+                for step, batch in enumerate(test_ood_dataloader):
+                    with torch.no_grad():        
+                        batch['labels'] = torch.zeros_like(batch['labels'])
+                        batch = {k: v.cuda() for k, v in batch.items()}   
+                        # pdb.set_trace()            
+                        loss, logits, last_hidden = model_engine(**batch)
+                        predictions = logits.argmax(dim=-1)
+                        pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
+                        ood_labels = torch.zeros_like(predictions)
+                        softmax_score = F.softmax(logits, dim=-1).max(-1)[0]
+                        maha_score = []
 
-                    ood_metric_softmax.add_batch(predictions=softmax_score, references=ood_labels,)
-                    ood_metric_maha.add_batch(predictions=maha_score, references=ood_labels,)
-                    ood_metric_cosine.add_batch(predictions=cosine_score, references=ood_labels,)
-                    ood_metric_energy.add_batch(predictions=energy_score, references=ood_labels,)
-            eval_metric = {}
-            for metric in metrics:
-                new_metric = metric.compute()
-                if new_metric is not None:
-                    eval_metric.update(new_metric)
-        # eval_metric = metric.compute() # evaluate ood
+                        for c in label_id_list:
+                            centered_pooled = pooled - class_mean[c].unsqueeze(0)
+                            ms = torch.diag(centered_pooled @ class_var @ centered_pooled.t())
+                            maha_score.append(ms)
+                        maha_score = torch.stack(maha_score, dim=-1)
+
+                        maha_score, pred = maha_score.min(-1)
+                        maha_score = -maha_score
+
+                        norm_pooled = F.normalize(pooled, dim=-1)
+                        cosine_score = norm_pooled @ norm_bank.t()
+                        cosine_score = cosine_score.max(-1)[0]
+
+                        energy_score = torch.logsumexp(logits, dim=-1)
+
+                        ood_metric_softmax.add_batch(predictions=softmax_score, references=ood_labels,)
+                        ood_metric_maha.add_batch(predictions=maha_score, references=ood_labels,)
+                        ood_metric_cosine.add_batch(predictions=cosine_score, references=ood_labels,)
+                        ood_metric_energy.add_batch(predictions=energy_score, references=ood_labels,)
+                for metric in metrics:
+                    if metric != ind_metric:
+                        new_metric = metric.compute()
+                        if new_metric is not None:
+                            eval_metric.update(new_metric)
+
         if args.local_rank == 0:
             write_setting = 'w' if epoch < 1 else 'a'
             with open(log_path, write_setting) as f:
@@ -879,7 +887,6 @@ def main():
         
         metric_df = pd.read_csv(log_path, delimiter='\t', header=0)
         print(metric_df['AUROC(maha)'])
-        print(metric_df['AUROC(maha)'].iloc[-1])
         if metric_df['accuracy'].iloc[-1] > best_acc:
             best_acc = metric_df['accuracy'].iloc[-1]
             save_flag = True      
@@ -917,39 +924,6 @@ def main():
     #         if "f1" in test_metric.keys():
     #             writer.add_scalar('Test/F1', test_metric['f1'], model_engine.global_steps)
     #         logger.info(f"TEST results {test_metric}")
-
-
-def my_see_memory_usage(message):
-
-    # python doesn't do real-time garbage collection so do it explicitly to get the correct RAM reports
-    gc.collect()
-
-    # Print message except when distributed but not rank 0
-    
-    if hasattr(torch.cuda, "memory_reserved"):
-        torch_memory_reserved = torch.cuda.memory_reserved
-    else:
-        torch_memory_reserved = torch.cuda.memory_allocated
-    if hasattr(torch.cuda, "max_memory_reserved"):
-        torch_max_memory_reserved = torch.cuda.max_memory_reserved
-    else:
-        torch_max_memory_reserved = torch.cuda.memory_cached
-    logger.info(message)
-    logger.info(
-        f"MA {round(torch.cuda.memory_allocated() / (1024 * 1024 * 1024),2 )} GB \
-        Max_MA {round(torch.cuda.max_memory_allocated() / (1024 * 1024 * 1024),2)} GB \
-        CA {round(torch_memory_reserved() / (1024 * 1024 * 1024),2)} GB \
-        Max_CA {round(torch_max_memory_reserved() / (1024 * 1024 * 1024))} GB ")
-
-    vm_stats = psutil.virtual_memory()
-    used_GB = round(((vm_stats.total - vm_stats.available) / (1024**3)), 2)
-    logger.info(
-        f'CPU Virtual Memory:  used = {used_GB} GB, percent = {vm_stats.percent}%')
-
-    # get the peak memory to report correct data, so reset the counter for the next call
-    if hasattr(torch.cuda, "reset_peak_memory_stats"):  # pytorch 1.4+
-        torch.cuda.reset_peak_memory_stats()
-
 
 if __name__ == "__main__":
     main()
