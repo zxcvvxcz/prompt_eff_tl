@@ -511,8 +511,6 @@ def main():
     # pdb.set_trace()
    # Preprocessing the datasets
     see_memory_usage('After init', True)
-    if args.local_rank == 0:
-        print(model.config)
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
 
     # Some models have set the order of the labels to use, so let's make sure we do use it.
@@ -764,8 +762,8 @@ def main():
         log_tsv_name += f'lora_r_{args.lora_r}_lora_alpha_{args.lora_alpha}'
     else:
         log_tsv_name += f'fine_tune'
-    log_tsv_name += '.tsv'
-    log_path = os.path.join(args.output_dir, log_tsv_name)
+    log_path = os.path.join(args.output_dir, log_tsv_name + '.tsv')
+    acc_path = os.path.join(args.output_dir, log_tsv_name + '_acc.txt')
     
     for epoch in range(args.num_train_epochs):
         model_engine.train()
@@ -801,7 +799,15 @@ def main():
                     predictions = logits.argmax(dim=-1)
                     ind_metric.add_batch(predictions=predictions, references=batch["labels"],)
             eval_metric = ind_metric.compute()
-            if check_ood_eval_condition(args, eval_metric['accuracy']):
+            if args.local_rank == 0:
+                with open(acc_path, 'w') as f:
+                    f.write(str(eval_metric['accuracy']))
+            torch.distributed.barrier()
+
+            with open(acc_path, 'r') as f:
+                acc = float(f.read())
+                print(acc)
+            if check_ood_eval_condition(args, acc):
                 class_mean, class_var, norm_bank = prepare_ood(model_engine, maha_dataloader, config)
             
                 for step, batch in enumerate(test_ind_dataloader):
@@ -832,7 +838,6 @@ def main():
                         ood_metric_maha.add_batch(predictions=maha_score, references=ood_labels,)
                         ood_metric_cosine.add_batch(predictions=cosine_score, references=ood_labels,)
                         ood_metric_energy.add_batch(predictions=energy_score, references=ood_labels,)
-                        ind_metric.add_batch(predictions=predictions, references=batch["labels"],)
                         ind_metric_maha.add_batch(predictions=pred, references=batch["labels"],)
                         
                 for step, batch in enumerate(test_ood_dataloader):
@@ -886,7 +891,6 @@ def main():
         torch.distributed.barrier()
         
         metric_df = pd.read_csv(log_path, delimiter='\t', header=0)
-        print(metric_df['AUROC(maha)'])
         if metric_df['accuracy'].iloc[-1] > best_acc:
             best_acc = metric_df['accuracy'].iloc[-1]
             save_flag = True      
