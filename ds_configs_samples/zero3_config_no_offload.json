@@ -3,9 +3,10 @@
     "gradient_accumulation_steps": 1,
     "allgather_bucket_size": 2e8,
     "reduce_bucket_size": 2e8,
-    "steps_per_print":50000,
+    "steps_per_print":100,
     "fp16": {
-      "enabled": "auto"
+      "enabled": "auto",
+      "min_loss_scale": 0.01
     },
     "zero_allow_untested_optimizer": true,
     "zero_optimization": {
