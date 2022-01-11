@@ -366,7 +366,7 @@ def check_ood_eval_condition(args, curr_acc):
             param_ratio = 0.1 if args.adapter_size < 62 else 1
             if task_name == 'banking77': # banking, 25
                 assert split, 'banking77 must be split!'
-                ood_threshold = 96 if param_ratio == 0.1 else 96
+                ood_threshold = 94 if param_ratio == 0.1 else 96
             elif task_name == 'clinc150': 
                 if split == True and split_ratio == 0.25: # clinc, 25
                     ood_threshold = 98 if param_ratio == 0.1 else 99

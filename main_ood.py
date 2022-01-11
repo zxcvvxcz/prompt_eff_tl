@@ -763,7 +763,10 @@ def main():
     else:
         log_tsv_name += f'fine_tune'
     log_path = os.path.join(args.output_dir, log_tsv_name + '.tsv')
+    log_path_acc_only = os.path.join(args.output_dir, log_tsv_name + '_acc.tsv')
     acc_path = os.path.join(args.output_dir, log_tsv_name + '_acc.txt')
+    
+    is_first_write = True
     
     for epoch in range(args.num_train_epochs):
         model_engine.train()
@@ -798,16 +801,26 @@ def main():
                     loss, logits, last_hidden = model_engine(**batch)
                     predictions = logits.argmax(dim=-1)
                     ind_metric.add_batch(predictions=predictions, references=batch["labels"],)
-            eval_metric = ind_metric.compute()
+            acc = ind_metric.compute()
+            
             if args.local_rank == 0:
+                acc = acc['accuracy']
                 with open(acc_path, 'w') as f:
-                    f.write(str(eval_metric['accuracy']))
+                    f.write(str(acc))
+                write_setting = 'w' if epoch < 1 else 'a'
+                with open(log_path_acc_only, write_setting) as f:
+                    csv_writer_acc_only = csv.writer(f, delimiter='\t')
+                    title = ['accuracy']
+                    if write_setting == 'w':
+                        csv_writer_acc_only.writerow(title)
+                    csv_writer_acc_only.writerow([acc])
             torch.distributed.barrier()
 
             with open(acc_path, 'r') as f:
                 acc = float(f.read())
                 print(acc)
-            if check_ood_eval_condition(args, acc):
+            eval_metric = {}
+            if check_ood_eval_condition(args, acc * 100):
                 class_mean, class_var, norm_bank = prepare_ood(model_engine, maha_dataloader, config)
             
                 for step, batch in enumerate(test_ind_dataloader):
@@ -877,22 +890,25 @@ def main():
                         if new_metric is not None:
                             eval_metric.update(new_metric)
 
-        if args.local_rank == 0:
-            write_setting = 'w' if epoch < 1 else 'a'
-            with open(log_path, write_setting) as f:
-                csv_writer = csv.writer(f, delimiter='\t')
-                title = sorted(eval_metric.keys())
-                if write_setting == 'w':
-                    csv_writer.writerow(title)
-                csv_writer.writerow([eval_metric[k] for k in title])
-            for k, v in eval_metric.items():
-                writer.add_scalar(f'Validation/{k}', eval_metric[k], model_engine.global_steps)
-            logger.info(f"Valditaion step {model_engine.global_steps} results {eval_metric}")
+                if args.local_rank == 0:
+                    write_setting = 'w' if is_first_write else 'a'
+                    print(f'log_path: {log_path}')
+                    with open(log_path, write_setting) as f:
+                        csv_writer = csv.writer(f, delimiter='\t')
+                        title = sorted(eval_metric.keys())
+                        print(f'write_setting: {write_setting}')
+                        print(f'title: {title}')
+                        if is_first_write:
+                            csv_writer.writerow(title)
+                            is_first_write = False
+                        csv_writer.writerow([eval_metric[k] for k in title])
+                    for k, v in eval_metric.items():
+                        writer.add_scalar(f'Validation/{k}', eval_metric[k], model_engine.global_steps)
+                    logger.info(f"Validation step {model_engine.global_steps} results {acc}")
         torch.distributed.barrier()
         
-        metric_df = pd.read_csv(log_path, delimiter='\t', header=0)
-        if metric_df['accuracy'].iloc[-1] > best_acc:
-            best_acc = metric_df['accuracy'].iloc[-1]
+        if acc > best_acc:
+            best_acc = acc
             save_flag = True      
             patience = 0      
         else:
