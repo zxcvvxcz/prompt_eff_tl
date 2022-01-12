@@ -885,9 +885,11 @@ def main():
                         ood_metric_cosine.add_batch(predictions=cosine_score, references=ood_labels,)
                         ood_metric_energy.add_batch(predictions=energy_score, references=ood_labels,)
                 for metric in metrics:
-                    new_metric = metric.compute()
-                    if new_metric is not None:
-                        eval_metric.update(new_metric)
+                    if metric != ind_metric:
+                        new_metric = metric.compute()
+                        if new_metric is not None:
+                            eval_metric.update(new_metric)
+                eval_metric.update({'accuracy':acc})
 
                 if args.local_rank == 0:
                     write_setting = 'w' if is_first_write else 'a'
