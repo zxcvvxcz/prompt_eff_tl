@@ -889,9 +889,9 @@ def main():
                         new_metric = metric.compute()
                         if new_metric is not None:
                             eval_metric.update(new_metric)
-                eval_metric.update({'accuracy':acc})
 
                 if args.local_rank == 0:
+                    eval_metric.update({'accuracy':acc})
                     write_setting = 'w' if is_first_write else 'a'
                     print(f'log_path: {log_path}')
                     with open(log_path, write_setting) as f:
