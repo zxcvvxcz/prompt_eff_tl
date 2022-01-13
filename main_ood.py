@@ -327,6 +327,18 @@ def parse_args():
         type=float, 
         help='Learning ratio for custom cosine lr scheduler, must be between 0.1~0.2.'
     )
+    parser.add_argument(
+        '--apply_reparam', 
+        default=False, 
+        action="store_true",
+        help='Reparameterize prompt.'
+    )
+    parser.add_argument(
+        '--apply_linear_probing', 
+        default=False, 
+        action="store_true",
+        help='Apply linear probing.'
+    )
 
 
     args = parser.parse_args()
@@ -484,7 +496,8 @@ def main():
         apply_encoder=args.apply_encoder, apply_input=args.apply_input, encoder_model_name_or_path=args.encoder_model_name_or_path,
         freeze_encoder=args.freeze_encoder, prompt_length=args.prompt_length, 
         apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, 
-        reparameterize=args.reparameterize,
+        reparameterize=args.reparameterize, apply_reparam=args.apply_reparam,
+        apply_prompt=args.apply_prompt, apply_linear_probing=args.apply_linear_probing,
     )
     # TODO : fix?
     if args.is_zero3:
@@ -649,6 +662,11 @@ def main():
         trainable_param_names.append('adapter')
     if args.apply_encoder:
         trainable_param_names.append('encoder')
+    if args.apply_prompt:
+        trainable_param_names.append('prompt')
+    if args.apply_linear_probing:
+        trainable_param_names.append('lienar_probing')
+
 
     # if no trainable_param_names -> full fine tune
     if len(trainable_param_names) > 0:
@@ -818,7 +836,9 @@ def main():
 
             with open(acc_path, 'r') as f:
                 acc = float(f.read())
-                print(acc)
+                if args.local_rank == 0:
+                    writer.add_scalar('Eval/acc', acc * 100, model_engine.global_steps)
+                    logger.info(f'ACC : {acc}')
             eval_metric = {}
             if check_ood_eval_condition(args, acc * 100):
                 class_mean, class_var, norm_bank = prepare_ood(model_engine, maha_dataloader, config)

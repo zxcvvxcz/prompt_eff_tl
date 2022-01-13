@@ -495,6 +495,26 @@ def check_ood_eval_condition(args, curr_acc):
                 elif split == False:
                     ood_threshold = 90 if param_ratio == 0.1 else 90
         
+    # for prompt tuning
+    elif args.apply_prompt == True:
+        if 'gpt-neo-2.7B' in model_name:
+            param_ratio = 0.1 
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 85
+            elif task_name == 'clinc150': 
+                ood_threshold = 85
+
+    # for lienar probing
+    elif args.apply_linear_probing == True:
+        if 'gpt-neo-2.7B' in model_name or 'gpt-j-6B' in model_name:
+            param_ratio = 0.1 
+            if task_name == 'banking77':
+                assert split, 'banking77 must be split!'
+                ood_threshold = 80
+            elif task_name == 'clinc150': 
+                ood_threshold = 80
+            
     else: # fine tuning, no param ratio
         if 'gpt-j-6B' in model_name:
             if task_name == 'banking77':

@@ -39,12 +39,16 @@ class PromptInputProcessor(BaseInputProcessor):
         self.encoder_prompt_length = self.config.prompt_length
         assert self.encoder_prompt_length > 0, f'Prompt length must be greater than 0, got {self.encoder_prompt_length}.'
         # shape : (prompt_length, )
-        self.encoder_prompt_inputs = torch.LongTensor(list(range(self.encoder_prompt_length)))
+        # self.encoder_prompt_inputs = torch.LongTensor(list(range(self.encoder_prompt_length)))
         # shape : (prompt_length, embedding_dim)
         self.encoder_prompt_embeddings = torch.nn.Embedding(self.encoder_prompt_length, self.embedding_dim)
         # shape : (prompt_length, )
-        self.encoder_prompt_attention_mask = torch.ones(self.encoder_prompt_length)
-                
+        # self.encoder_prompt_attention_mask = torch.ones(self.encoder_prompt_length)
+        
+        if config.apply_reparam:
+            self.mlp_head = torch.nn.Sequential(torch.nn.Linear(self.embedding_dim, 480),
+                                          torch.nn.ReLU(),
+                                          torch.nn.Linear(480, self.embedding_dim))     
     def forward(
         self,
         input_ids:torch.Tensor, 
@@ -53,23 +57,32 @@ class PromptInputProcessor(BaseInputProcessor):
 
         batch_size, _ = input_ids.shape
 
+        input_length = torch.ne(attention_mask, 0).sum(-1)
         # shape : (batch, length, embedding_dim)
         input_embeddings = self.embeddings(input_ids)
 
         # shape : (prompt_length, embedding_dim)
-        prompt_embeddings = self.encoder_prompt_embeddings(self.encoder_prompt_inputs)
+        encoder_prompt_inputs = torch.LongTensor(list(range(self.encoder_prompt_length))).to(input_embeddings.device)
+        prompt_embeddings = self.encoder_prompt_embeddings(encoder_prompt_inputs)
         # shape : (batch, prompt_length, embedding_dim)
         prompt_embeddings = prompt_embeddings.unsqueeze(0).expand(batch_size, self.encoder_prompt_length, -1)
 
         # shape : (batch, prompt_length)
-        prompt_attention_mask = self.encoder_prompt_attention_mask.unsqueeze(0).expand(batch_size, self.encoder_prompt_length)
+        encoder_prompt_attention_mask = torch.ones(self.encoder_prompt_length).to(input_embeddings.device)
+        prompt_attention_mask = encoder_prompt_attention_mask.unsqueeze(0).expand(batch_size, self.encoder_prompt_length)
 
-        input_embeddings = torch.cat([prompt_embeddings, input_embeddings], dim=1)
+        if self.config.apply_reparam:
+            if self.encoder_prompt_length == 1:
+                prompt_embeddings = self.mlp_head(prompt_embeddings)
+            else:
+                prompt_embeddings = self.mlp_head(prompt_embeddings).squeeze()
+
+        final_input_embeddings = torch.cat([prompt_embeddings, input_embeddings], dim=1)
         attention_mask = torch.cat([prompt_attention_mask, attention_mask], dim=1)
 
         # input_embeddings : (batch, length, embedding_dim)
         # attention_mask   : (batch, length)
-        return input_embeddings, attention_mask
+        return final_input_embeddings, attention_mask
 
 
 ## BASELINE ##
