@@ -315,14 +315,14 @@ class GPTJBlock(nn.Module):
 
         #! HS  
         if hasattr(self, 'adapter1'):
-            attn_output = self.adapter1(attn_output) + residual
+            attn_output = self.adapter1(attn_output)
         #! HS  
 
         feed_forward_hidden_states = self.mlp(hidden_states)
         
         #! HS  
         if hasattr(self, 'adapter2'):
-            feed_forward_hidden_states = self.adapter2(feed_forward_hidden_states) + residual
+            feed_forward_hidden_states = self.adapter2(feed_forward_hidden_states)
         #! HS  
         
         hidden_states = attn_output + feed_forward_hidden_states + residual
