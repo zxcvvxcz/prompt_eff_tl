@@ -139,3 +139,4 @@ outputs
 .nv
 .bash_history
 .python_history
+.venv

@@ -390,9 +390,13 @@ class GPT2Block(nn.Module):
             self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
         if config.apply_adapter:
-            if config.adapter_type == 'houlsby':
-                self.attention_adapter = Adapter(hidden_size, config.adapter_size, 'swish')
-            self.output_adapter = Adapter(config.hidden_size, config.adapter_size, 'swish' if config.adapter_type == 'houlsby' else 'relu')
+            # CH
+            self.attention_adapter = Adapter(hidden_size, config.adapter_size, 'swish')
+            self.output_adapter = Adapter(hidden_size, config.adapter_size, 'swish' if config.adapter_type == 'houlsby' else 'relu')
+            #CH
+            # if config.adapter_type == 'houlsby':
+            #     self.attention_adapter = Adapter(hidden_size, config.adapter_size, 'swish')
+            # self.output_adapter = Adapter(config.hidden_size, config.adapter_size, 'swish' if config.adapter_type == 'houlsby' else 'relu')
 
         self.mlp = GPT2MLP(inner_dim, config)
 
@@ -421,9 +425,14 @@ class GPT2Block(nn.Module):
         outputs = attn_outputs[1:]
         # residual connection
         if hasattr(self, 'attention_adapter'):
-            hidden_states = self.attention_adapter(attn_output, residual=residual)
-        else:
-            hidden_states = attn_output + residual
+        # CH
+            hidden_states = self.attention_adapter(attn_output)
+
+        hidden_states = hidden_states + residual
+        # CH
+            # hidden_states = self.attention_adapter(attn_output, residual=residual)
+        # else:
+        #     hidden_states = attn_output + residual
 
         if encoder_hidden_states is not None:
             # add one self-attention block for cross-attention
@@ -452,9 +461,15 @@ class GPT2Block(nn.Module):
         feed_forward_hidden_states = self.mlp(hidden_states)
         # residual connection
         if hasattr(self, 'output_adapter'):
-            hidden_states = self.output_adapter(feed_forward_hidden_states, residual=residual)
-        else:
-            hidden_states = residual + feed_forward_hidden_states
+        # CH
+            hidden_states = self.output_adapter(feed_forward_hidden_states)
+
+        hidden_states = residual + hidden_states
+
+        #CH
+        #     hidden_states = self.output_adapter(feed_forward_hidden_states, residual=residual)
+        # else:
+        #     hidden_states = residual + feed_forward_hidden_states
 
         if use_cache:
             outputs = (hidden_states,) + outputs

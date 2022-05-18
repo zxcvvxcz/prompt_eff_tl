@@ -37,5 +37,4 @@ model = GPT2Wrapper(config=config, model_name_or_path=model_name, cache_dir=cach
 
 
 
-estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=8, num_nodes=1)
-estimate_zero3_model_states_mem_needs_all_live(model, num_gpus_per_node=1, num_nodes=1)
+estimate_zero2_model_states_mem_needs_all_live(model, num_gpus_per_node=8, num_nodes=1)

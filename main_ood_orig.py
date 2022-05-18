@@ -5,6 +5,8 @@ import math
 import os
 import random
 import json
+import gc
+import psutil
 from pathlib import Path
 from functools import partial
 import pdb
@@ -35,18 +37,20 @@ from transformers import (
 import torch
 import torch.nn.functional as F
 import deepspeed
+from deepspeed.runtime.utils import see_memory_usage
 from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 from deepspeed.runtime.utils import see_memory_usage
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
-from transformers import AutoModel, GPT2Tokenizer, GPT2Model, GPTNeoModel, GPTJModel, T5Tokenizer, T5Model
+from transformers import AutoModel, GPT2Tokenizer, GPT2Model, GPTNeoModel, GPTJModel, T5Tokenizer, T5Model, T5EncoderModel, T5ForConditionalGeneration
 
 from model_wrapper.GPT2Wrapper import GPT2Wrapper
+from model_wrapper.T5Wrapper import T5EncWrapper
 from model_wrapper.InputProcessor import *
 from model_wrapper.OutputProcessor import BaseOutputProcessor
 from utils import save_config, set_value_to_shared_json_file, get_value_from_shared_json_file
 
-from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn
+from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn, check_ood_eval_condition
 from ood_eval import prepare_ood, get_maha_embedding
 logger = logging.getLogger(__name__)
 start = time()
@@ -112,6 +116,22 @@ def parse_args():
         required=True,
     )
     parser.add_argument(
+        "--load_init_model",
+        action="store_true",
+        help="If passed, initialize model from zero checkpoint.",
+    )
+    parser.add_argument(
+        "--save_init_model",
+        action="store_true",
+        help="If passed, save initial model as zero checkpoint.",
+    )
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        default=os.path.join("ckpt"),
+        help="If passed, save initial model as zero checkpoint.",
+    )
+    parser.add_argument(
         "--lr",
         type=float,
         default=5e-5,
@@ -169,7 +189,7 @@ def parse_args():
     parser.add_argument(
         "--seed", 
         type=int, 
-        default=None, 
+        default=42, 
         help="A seed for reproducible training."
     )
     parser.add_argument(
@@ -229,13 +249,13 @@ def parse_args():
     parser.add_argument(
         '--adapter_size', 
         default=2,
-        type=int,
+        type=int, 
         help='size of adapter'
     )
     parser.add_argument(
         '--adapter_type', 
         default='houlsby',
-        type=str, 
+        type=str,
         help='type of adapter(houlsby, pfeiffer)'
     )
 
@@ -326,7 +346,12 @@ def parse_args():
     with open(args.ds_config, "r", encoding="utf-8") as ds_f:
         ds_config = json.load(ds_f)
     args.per_device_batch_size = ds_config['train_micro_batch_size_per_gpu']
-    args.gradient_accumulation_steps = ds_config['gradient_accumulation_steps']
+    if args.gradient_accumulation_steps != ds_config['gradient_accumulation_steps']:
+        print('gradient_accumulation_steps mismatch!')
+        if args.gradient_accumulation_steps == 1 or ds_config['gradient_accumulation_steps'] != 1:
+            args.gradient_accumulation_steps = ds_config['gradient_accumulation_steps']
+        else:
+            ds_config['gradient_accumulation_steps'] = args.gradient_accumulation_steps
     if ds_config.get("zero_optimization"):
         args.is_zero3 = ds_config["zero_optimization"]["stage"] == 3
     else:
@@ -458,21 +483,31 @@ def main():
         apply_prefix=args.apply_prefix, num_prefix=args.num_prefix, mid_dim=args.mid_dim,
         apply_encoder=args.apply_encoder, apply_input=args.apply_input, encoder_model_name_or_path=args.encoder_model_name_or_path,
         freeze_encoder=args.freeze_encoder, prompt_length=args.prompt_length, 
-        apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, adapter_type=args.adapter_type,
+        apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, 
         reparameterize=args.reparameterize,
     )
-    
     # TODO : fix?
     if args.is_zero3:
         zero_init_start_time = time()
         see_memory_usage('Before zero init', True)
         with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
-            model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-            # model = AutoModel.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
-            # model = BaseInputProcessor(config=config, embeddings=model.wte)
+            if 't5' in args.model_name_or_path:
+                model = T5EncWrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                    args.load_init_model, args.ckpt_path)
+            else:
+                model = GPT2Wrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                    args.load_init_model, args.ckpt_path)
+           
         print(f"Zero init time: {time() - zero_init_start_time}")
     else:
-        model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+        if 't5' in args.model_name_or_path:
+            model = T5EncWrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                args.load_init_model, args.ckpt_path)
+        else:
+            model = GPT2Wrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                args.load_init_model, args.ckpt_path)
+            
+        # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
     # pdb.set_trace()
    # Preprocessing the datasets
     see_memory_usage('After init', True)
@@ -562,6 +597,7 @@ def main():
 
     train_sampler = DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, collate_fn=data_collator, batch_size=args.per_device_batch_size)
+    maha_dataloader = DataLoader(train_dataset, shuffle=False, collate_fn=data_collator, batch_size=args.per_device_batch_size)
     if args.task_name in intent_tasks:
         test_ind_sampler = DistributedSampler(test_ind_dataset)
         test_ind_dataloader = DataLoader(test_ind_dataset, sampler=test_ind_sampler, collate_fn=data_collator, batch_size=args.per_device_batch_size, shuffle=False)       
@@ -589,6 +625,20 @@ def main():
             label_id_list.append(label)
     label_id_list.sort()
     
+    # Get the metric function
+    if args.task_name in intent_tasks:
+        ood_metric_energy = load_metric('OOD', 'energy', num_process=args.world_size, process_id=args.local_rank)
+        ood_metric_softmax = load_metric('OOD', 'softmax', num_process=args.world_size, process_id=args.local_rank)
+        ood_metric_maha = load_metric('OOD', 'maha', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list)
+        ood_metric_cosine = load_metric('OOD', 'cosine', num_process=args.world_size, process_id=args.local_rank)
+        ind_metric = load_metric('accuracy', num_process=args.world_size, process_id=args.local_rank)
+        ind_metric_maha = load_metric('IND', 'maha_acc', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list)
+        metrics = [ind_metric, ind_metric_maha, ood_metric_softmax, ood_metric_energy, ood_metric_cosine, ood_metric_maha]
+    elif args.task_name is not None:
+        metric = load_metric('glue', args.task_name, num_process=args.world_size, process_id=args.local_rank)
+    else:
+        metric = load_metric("accuracy", num_process=args.world_size, process_id=args.local_rank)
+
     # Set params to train
     trainable_param_names = []
     if args.apply_lora:
@@ -625,6 +675,18 @@ def main():
                     if args.local_rank == 0:
                         logger.info(f'>> OTHERS {name} {param.shape} -> {param.numel()}')
                 
+    # Split weights in two groups, one with weight decay and the other not.
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and p.requires_grad==True],
+            "weight_decay": args.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and p.requires_grad==True],
+            "weight_decay": 0.0,
+        },
+    ]
     
     if args.local_rank == 0:
         num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -647,6 +709,28 @@ def main():
                 if param.requires_grad == True:
                     file_writer.write(f"{name} > {param.shape} \n")
     
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
+
+    lr_scheduler = get_scheduler(
+        name=args.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=args.num_warmup_steps,
+        num_training_steps=args.max_train_steps,
+        lr_ratio=args.lr_ratio
+    )
+    see_memory_usage('Before model engine', True)
+    model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, config=args.ds_config)
+    if args.load_init_model:
+        load_path, client_sd = model_engine.load_checkpoint(args.ckpt_path)
+        print(f'Loaded initial model from {load_path}')
+    if args.save_init_model:
+        model_engine.save_checkpoint(args.ckpt_path)
+        print(f'Saved initial model in {load_path}')
+    see_memory_usage('After model engine', True)
+    # pdb.set_trace()
+    # del model
+    # see_memory_usage('After delete model', True)
+    # Train!
     if args.local_rank == 0:
         total_batch_size = args.per_device_batch_size * args.world_size * args.gradient_accumulation_steps
         logger.info("***** Running training *****")
@@ -661,6 +745,206 @@ def main():
         logger.info(f"  Number of trainable params = {num_trainable_params}")
         logger.info(f"  Number of total params = {num_total_params}")
         logger.info(f"  % of trainable params = {(100 * num_trainable_params/num_total_params):.3f}")
+
+    # # Only show the progress bar once on each machine.
+    progress_bar = tqdm(range(args.max_train_steps), disable=(args.local_rank != 0))
+    completed_steps = 0
+    best_acc = 0
+    save_flag = False
+    patience = 0
+    EARLY_STOP = 5
+    log_tsv_name = f'eval_result_{args.lr}'
+    if args.apply_prefix:
+        log_tsv_name += f'num_prefix_{args.num_prefix}_mid_dim_{args.mid_dim}'
+    elif args.apply_adapter:
+        log_tsv_name += f'adapter_size_{args.adapter_size}'
+    elif args.apply_lora:
+        log_tsv_name += f'lora_r_{args.lora_r}_lora_alpha_{args.lora_alpha}'
+    else:
+        log_tsv_name += f'fine_tune'
+    log_path = os.path.join(args.output_dir, log_tsv_name + '.tsv')
+    log_path_acc_only = os.path.join(args.output_dir, log_tsv_name + '_acc.tsv')
+    acc_path = os.path.join(args.output_dir, log_tsv_name + '_acc.txt')
+    
+    is_first_write = True
+    
+    for epoch in range(args.num_train_epochs):
+        model_engine.train()
+        if patience >= EARLY_STOP:
+            break
+        train_sampler.set_epoch(epoch)
+        for step, batch in enumerate(train_dataloader):
+            batch = {k: v.cuda() for k, v in batch.items()}
+            output = model_engine(**batch)
+            loss = output[0]
+            loss = loss / args.gradient_accumulation_steps
+            if args.local_rank == 0:
+                writer.add_scalar('Train/Loss', loss, model_engine.global_steps)
+                writer.add_scalar('Train/LR', model_engine.get_lr()[0], model_engine.global_steps)
+            model_engine.backward(loss)
+            if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
+                # model step manages optimizer
+                model_engine.step()
+                progress_bar.update(1)
+                completed_steps += 1
+
+            if completed_steps >= args.max_train_steps:
+                break
+
+        model_engine.eval()    
+        if args.task_name in intent_tasks:
+            # if args.local_rank == 0:
+            # class_mean, class_var, norm_bank = prepare_ood(model_engine, train_dataloader, config)
+            for step, batch in enumerate(test_ind_dataloader):
+                with torch.no_grad():
+                    batch = {k: v.cuda() for k, v in batch.items()}
+                    loss, logits, last_hidden = model_engine(**batch)
+                    predictions = logits.argmax(dim=-1)
+                    ind_metric.add_batch(predictions=predictions, references=batch["labels"],)
+            acc = ind_metric.compute()
+            
+            if args.local_rank == 0:
+                acc = acc['accuracy']
+                with open(acc_path, 'w') as f:
+                    f.write(str(acc))
+                write_setting = 'w' if epoch < 1 else 'a'
+                with open(log_path_acc_only, write_setting) as f:
+                    csv_writer_acc_only = csv.writer(f, delimiter='\t')
+                    title = ['accuracy']
+                    if write_setting == 'w':
+                        csv_writer_acc_only.writerow(title)
+                    csv_writer_acc_only.writerow([acc])
+            torch.distributed.barrier()
+
+            with open(acc_path, 'r') as f:
+                acc = float(f.read())
+                print(acc)
+            eval_metric = {}
+            if check_ood_eval_condition(args, acc * 100):
+                class_mean, class_var, norm_bank = prepare_ood(model_engine, maha_dataloader, config)
+            
+                for step, batch in enumerate(test_ind_dataloader):
+                    with torch.no_grad():
+                        batch = {k: v.cuda() for k, v in batch.items()}
+                        loss, logits, last_hidden = model_engine(**batch)
+                        predictions = logits.argmax(dim=-1)
+                        pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
+                        ood_labels = torch.ones_like(predictions)
+                        softmax_score = F.softmax(logits, dim=-1).max(-1)[0]
+                        maha_score = []
+
+                        for c in label_id_list:
+                            centered_pooled = pooled - class_mean[c].unsqueeze(0)
+                            ms = torch.diag(centered_pooled @ class_var @ centered_pooled.t())
+                            maha_score.append(ms)
+                        maha_score = torch.stack(maha_score, dim=-1)
+
+                        maha_score, pred = maha_score.min(-1)
+                        maha_score = -maha_score
+
+                        norm_pooled = F.normalize(pooled, dim=-1)
+                        cosine_score = norm_pooled @ norm_bank.t()
+                        cosine_score = cosine_score.max(-1)[0]
+
+                        energy_score = torch.logsumexp(logits, dim=-1)
+                        ood_metric_softmax.add_batch(predictions=softmax_score, references=ood_labels,)
+                        ood_metric_maha.add_batch(predictions=maha_score, references=ood_labels,)
+                        ood_metric_cosine.add_batch(predictions=cosine_score, references=ood_labels,)
+                        ood_metric_energy.add_batch(predictions=energy_score, references=ood_labels,)
+                        ind_metric_maha.add_batch(predictions=pred, references=batch["labels"],)
+                        
+                for step, batch in enumerate(test_ood_dataloader):
+                    with torch.no_grad():        
+                        batch['labels'] = torch.zeros_like(batch['labels'])
+                        batch = {k: v.cuda() for k, v in batch.items()}   
+                        # pdb.set_trace()            
+                        loss, logits, last_hidden = model_engine(**batch)
+                        predictions = logits.argmax(dim=-1)
+                        pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
+                        ood_labels = torch.zeros_like(predictions)
+                        softmax_score = F.softmax(logits, dim=-1).max(-1)[0]
+                        maha_score = []
+
+                        for c in label_id_list:
+                            centered_pooled = pooled - class_mean[c].unsqueeze(0)
+                            ms = torch.diag(centered_pooled @ class_var @ centered_pooled.t())
+                            maha_score.append(ms)
+                        maha_score = torch.stack(maha_score, dim=-1)
+
+                        maha_score, pred = maha_score.min(-1)
+                        maha_score = -maha_score
+
+                        norm_pooled = F.normalize(pooled, dim=-1)
+                        cosine_score = norm_pooled @ norm_bank.t()
+                        cosine_score = cosine_score.max(-1)[0]
+
+                        energy_score = torch.logsumexp(logits, dim=-1)
+
+                        ood_metric_softmax.add_batch(predictions=softmax_score, references=ood_labels,)
+                        ood_metric_maha.add_batch(predictions=maha_score, references=ood_labels,)
+                        ood_metric_cosine.add_batch(predictions=cosine_score, references=ood_labels,)
+                        ood_metric_energy.add_batch(predictions=energy_score, references=ood_labels,)
+                for metric in metrics:
+                    if metric != ind_metric:
+                        new_metric = metric.compute()
+                        if new_metric is not None:
+                            eval_metric.update(new_metric)
+
+                if args.local_rank == 0:
+                    eval_metric.update({'accuracy':acc})
+                    write_setting = 'w' if is_first_write else 'a'
+                    print(f'log_path: {log_path}')
+                    with open(log_path, write_setting) as f:
+                        csv_writer = csv.writer(f, delimiter='\t')
+                        title = sorted(eval_metric.keys())
+                        print(f'write_setting: {write_setting}')
+                        print(f'title: {title}')
+                        if is_first_write:
+                            csv_writer.writerow(title)
+                            is_first_write = False
+                        csv_writer.writerow([eval_metric[k] for k in title])
+                    for k, v in eval_metric.items():
+                        writer.add_scalar(f'Validation/{k}', eval_metric[k], model_engine.global_steps)
+                    logger.info(f"Validation step {model_engine.global_steps} results {acc}")
+        torch.distributed.barrier()
+        
+        if acc > best_acc:
+            best_acc = acc
+            save_flag = True      
+            patience = 0      
+        else:
+            save_flag = False
+            patience += 1
+        
+        # path, key, value, current rank, writer rank
+        # set_value_to_shared_json_file(args.output_dir, 'save_flag', save_flag, args.local_rank, 0)
+        # save_flag = get_value_from_shared_json_file(args.output_dir, 'save_flag')
+        # if save_flag:
+            # model_engine.save_checkpoint(args.output_dir)
+    if args.local_rank == 0:
+        end = time()
+        with open(os.path.join(args.output_dir, 'elapsed_time.txt'), 'w') as f:
+            f.write(f'{(end - start) // 3600}h {((end - start) % 3600) // 60}m {(end - start) % 60}s')
+    # load best dev model 
+    # TODO: In ZeRO3 load checkpoint after save checkpoint do not work!!
+    # if not args.is_zero3:
+    #     model_engine.load_checkpoint(args.output_dir)
+    #     model_engine.eval()
+    #     for step, batch in enumerate(test_dataloader):
+    #         with torch.no_grad():
+    #             batch = {k: v.cuda() for k, v in batch.items()}
+    #             # TODO : fix?
+    #             _, predictions, _ = model_engine(**batch)
+    #             metric.add_batch(
+    #                 predictions=predictions,
+    #                 references=batch["labels"],
+    #             )
+    #     test_metric = metric.compute()
+    #     if args.local_rank == 0:
+    #         writer.add_scalar('Test/Accuracy', test_metric['accuracy'])
+    #         if "f1" in test_metric.keys():
+    #             writer.add_scalar('Test/F1', test_metric['f1'], model_engine.global_steps)
+    #         logger.info(f"TEST results {test_metric}")
 
 if __name__ == "__main__":
     main()

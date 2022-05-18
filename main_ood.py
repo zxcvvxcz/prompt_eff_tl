@@ -308,6 +308,12 @@ def parse_args():
         type=str, 
         help='Where do you want to store the pretrained models downloaded from huggingface.co'
     )
+    parser.add_argument(
+        '--apply_linear', 
+        default=False, 
+        action="store_true",
+        help='apply linear evaluation'
+    )
     
     # OOD
     parser.add_argument(
@@ -317,7 +323,7 @@ def parse_args():
     )
     parser.add_argument(
         '--split_ratio', 
-        default=0.5, 
+        default=0.25, 
         type=float, 
         help='Split ratio for intent datasets.'
     )
@@ -626,18 +632,20 @@ def main():
     label_id_list.sort()
     
     # Get the metric function
+    experiment_id = os.environ["MASTER_PORT"] # since master port should be different for multiple execution, it can serve as experiment id
+
     if args.task_name in intent_tasks:
-        ood_metric_energy = load_metric('OOD', 'energy', num_process=args.world_size, process_id=args.local_rank)
-        ood_metric_softmax = load_metric('OOD', 'softmax', num_process=args.world_size, process_id=args.local_rank)
-        ood_metric_maha = load_metric('OOD', 'maha', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list)
-        ood_metric_cosine = load_metric('OOD', 'cosine', num_process=args.world_size, process_id=args.local_rank)
-        ind_metric = load_metric('accuracy', num_process=args.world_size, process_id=args.local_rank)
-        ind_metric_maha = load_metric('IND', 'maha_acc', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list)
+        ood_metric_energy = load_metric('OOD', 'energy', num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+        ood_metric_softmax = load_metric('OOD', 'softmax', num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+        ood_metric_maha = load_metric('OOD', 'maha', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list, experiment_id=experiment_id)
+        ood_metric_cosine = load_metric('OOD', 'cosine', num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+        ind_metric = load_metric('accuracy', num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+        ind_metric_maha = load_metric('IND', 'maha_acc', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list, experiment_id=experiment_id)
         metrics = [ind_metric, ind_metric_maha, ood_metric_softmax, ood_metric_energy, ood_metric_cosine, ood_metric_maha]
     elif args.task_name is not None:
-        metric = load_metric('glue', args.task_name, num_process=args.world_size, process_id=args.local_rank)
+        metric = load_metric('glue', args.task_name, num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
     else:
-        metric = load_metric("accuracy", num_process=args.world_size, process_id=args.local_rank)
+        metric = load_metric("accuracy", num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
 
     # Set params to train
     trainable_param_names = []
@@ -692,7 +700,7 @@ def main():
         num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         num_total_params = sum(p.numel() for p in model.parameters())
         transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
-        logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
+        # logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
         
         ## Write parameter info ##
         parameter_summary_file = os.path.join(args.output_dir, "parameter_summary.txt")
@@ -701,7 +709,7 @@ def main():
             file_writer.write(f"Trained     parameters\t{num_trainable_params}\n")
             file_writer.write(f"Transformer parameters\t{transformer_params}\n")
             file_writer.write(f"Total       parameters\t{num_total_params}\n")
-            file_writer.write(f"Trainable   ratio\t\t{100 * num_trainable_params / num_total_params} \n")
+            # file_writer.write(f"Trainable   ratio\t\t{100 * num_trainable_params / num_total_params} \n")
             file_writer.write("=" * 50 + '\n')
             file_writer.write("Trained parameters detail\n")
 
@@ -744,7 +752,7 @@ def main():
         logger.info(f"  Total optimization steps = {args.max_train_steps}")
         logger.info(f"  Number of trainable params = {num_trainable_params}")
         logger.info(f"  Number of total params = {num_total_params}")
-        logger.info(f"  % of trainable params = {(100 * num_trainable_params/num_total_params):.3f}")
+        # logger.info(f"  % of trainable params = {(100 * num_trainable_params/num_total_params):.3f}")
 
     # # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=(args.local_rank != 0))
@@ -752,7 +760,7 @@ def main():
     best_acc = 0
     save_flag = False
     patience = 0
-    EARLY_STOP = 5
+    EARLY_STOP = 3
     log_tsv_name = f'eval_result_{args.lr}'
     if args.apply_prefix:
         log_tsv_name += f'num_prefix_{args.num_prefix}_mid_dim_{args.mid_dim}'
@@ -760,6 +768,8 @@ def main():
         log_tsv_name += f'adapter_size_{args.adapter_size}'
     elif args.apply_lora:
         log_tsv_name += f'lora_r_{args.lora_r}_lora_alpha_{args.lora_alpha}'
+    elif args.apply_linear:
+        log_tsv_name += f'linear'
     else:
         log_tsv_name += f'fine_tune'
     log_path = os.path.join(args.output_dir, log_tsv_name + '.tsv')
