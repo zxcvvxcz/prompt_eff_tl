@@ -426,9 +426,9 @@ class GPT2Block(nn.Module):
         # residual connection
         if hasattr(self, 'attention_adapter'):
         # CH
-            hidden_states = self.attention_adapter(attn_output)
-
-        hidden_states = hidden_states + residual
+            hidden_states = self.attention_adapter(attn_output) + residual
+        else:
+            hidden_states = attn_output + residual
         # CH
             # hidden_states = self.attention_adapter(attn_output, residual=residual)
         # else:
@@ -462,9 +462,9 @@ class GPT2Block(nn.Module):
         # residual connection
         if hasattr(self, 'output_adapter'):
         # CH
-            hidden_states = self.output_adapter(feed_forward_hidden_states)
-
-        hidden_states = residual + hidden_states
+            hidden_states = self.output_adapter(feed_forward_hidden_states) + residual
+        else:
+            hidden_states = residual + feed_forward_hidden_states
 
         #CH
         #     hidden_states = self.output_adapter(feed_forward_hidden_states, residual=residual)

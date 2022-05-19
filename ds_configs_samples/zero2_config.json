@@ -1,5 +1,5 @@
 {
-  "train_micro_batch_size_per_gpu": 16,
+  "train_micro_batch_size_per_gpu": 8,
   "gradient_accumulation_steps": 1,
   "allgather_bucket_size": 2e8,
   "reduce_bucket_size": 2e8,

@@ -657,9 +657,8 @@ def main():
         trainable_param_names.append('adapter')
     if args.apply_encoder:
         trainable_param_names.append('encoder')
-
-    # if no trainable_param_names -> full fine tune
-    if len(trainable_param_names) > 0:
+        
+    if len(trainable_param_names) > 0 or args.apply_linear:
         for name, param in model.named_parameters():
             # train main model? (== fine-tuning)
             if name.startswith('transformer'):
