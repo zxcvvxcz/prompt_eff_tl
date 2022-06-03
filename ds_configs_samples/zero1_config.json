@@ -1,9 +1,10 @@
 {
-  "train_micro_batch_size_per_gpu": 1,
+  "train_micro_batch_size_per_gpu": 32,
   "gradient_accumulation_steps": 1,
   "steps_per_print":50000,
   "fp16": {
-    "enabled": true
+    "enabled": true,
+    "min_loss_scale": 1
   },
   "zero_allow_untested_optimizer": true,
   "zero_optimization": {

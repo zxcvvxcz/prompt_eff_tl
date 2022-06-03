@@ -5,14 +5,8 @@ import math
 import os
 import random
 import json
-import gc
-import psutil
-from pathlib import Path
 from functools import partial
 import pdb
-import pandas as pd
-
-import numpy as np
 import datasets
 from datasets import load_dataset, load_metric, DatasetDict
 from torch.utils.data import DataLoader
@@ -37,7 +31,6 @@ from transformers import (
 import torch
 import torch.nn.functional as F
 import deepspeed
-from deepspeed.runtime.utils import see_memory_usage
 from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 from deepspeed.runtime.utils import see_memory_usage
 from torch.utils.data.distributed import DistributedSampler
@@ -414,6 +407,25 @@ def main():
         save_config(args)
         writer = SummaryWriter(args.output_dir)
 
+    log_tsv_name = f'eval_result_seed_{args.seed}_{args.lr}'
+    if args.apply_prefix:
+        log_tsv_name += f'num_prefix_{args.num_prefix}_mid_dim_{args.mid_dim}'
+    elif args.apply_adapter:
+        log_tsv_name += f'adapter_size_{args.adapter_size}'
+    elif args.apply_lora:
+        log_tsv_name += f'lora_r_{args.lora_r}_lora_alpha_{args.lora_alpha}'
+    elif args.apply_linear:
+        log_tsv_name += f'linear'
+    else:
+        log_tsv_name += f'fine_tune'
+    log_path = os.path.join(args.output_dir, log_tsv_name + '.tsv')
+    log_path_acc_only = os.path.join(args.output_dir, log_tsv_name + '_acc.tsv')
+    acc_path = os.path.join(args.output_dir, log_tsv_name + '_acc.txt')
+    
+    if os.path.exists(log_path):
+        print('Train result already exists!')
+        return
+
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
     intent_tasks = ['clinc150', 'snips', 'banking77']
@@ -514,7 +526,6 @@ def main():
                                 args.load_init_model, args.ckpt_path)
             
         # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-    # pdb.set_trace()
    # Preprocessing the datasets
     see_memory_usage('After init', True)
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
@@ -697,6 +708,7 @@ def main():
     
     if args.local_rank == 0:
         num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        num_trainable_params_except_linear = num_trainable_params - num_labels * model.transformer.wte.embedding_dim
         num_total_params = sum(p.numel() for p in model.parameters())
         transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
         # logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
@@ -734,7 +746,6 @@ def main():
         model_engine.save_checkpoint(args.ckpt_path)
         print(f'Saved initial model in {load_path}')
     see_memory_usage('After model engine', True)
-    # pdb.set_trace()
     # del model
     # see_memory_usage('After delete model', True)
     # Train!
@@ -750,8 +761,11 @@ def main():
         logger.info(f"  Random Seed = {args.seed}")
         logger.info(f"  Total optimization steps = {args.max_train_steps}")
         logger.info(f"  Number of trainable params = {num_trainable_params}")
+        logger.info(f"  Number of trainable params by eff method = {num_trainable_params_except_linear}")
         logger.info(f"  Number of total params = {num_total_params}")
-        # logger.info(f"  % of trainable params = {(100 * num_trainable_params/num_total_params):.3f}")
+        logger.info(f"  Number of PLM params = {transformer_params}")
+        logger.info(f"  % of trainable params per whole model (old) = {(100 * num_trainable_params/num_total_params):.3f}")
+        logger.info(f"  % of trainable params per PLM only (new) = {(100 * num_trainable_params_except_linear/transformer_params):.3f}")
 
     # # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=(args.local_rank != 0))
@@ -759,24 +773,10 @@ def main():
     best_acc = 0
     save_flag = False
     patience = 0
-    EARLY_STOP = 3
-    log_tsv_name = f'eval_result_{args.lr}'
-    if args.apply_prefix:
-        log_tsv_name += f'num_prefix_{args.num_prefix}_mid_dim_{args.mid_dim}'
-    elif args.apply_adapter:
-        log_tsv_name += f'adapter_size_{args.adapter_size}'
-    elif args.apply_lora:
-        log_tsv_name += f'lora_r_{args.lora_r}_lora_alpha_{args.lora_alpha}'
-    elif args.apply_linear:
-        log_tsv_name += f'linear'
-    else:
-        log_tsv_name += f'fine_tune'
-    log_path = os.path.join(args.output_dir, log_tsv_name + '.tsv')
-    log_path_acc_only = os.path.join(args.output_dir, log_tsv_name + '_acc.tsv')
-    acc_path = os.path.join(args.output_dir, log_tsv_name + '_acc.txt')
+    EARLY_STOP = 4
     
-    is_first_write = True
-    
+    best_eval_metric = None
+
     for epoch in range(args.num_train_epochs):
         model_engine.train()
         if patience >= EARLY_STOP:
@@ -866,7 +866,6 @@ def main():
                     with torch.no_grad():        
                         batch['labels'] = torch.zeros_like(batch['labels'])
                         batch = {k: v.cuda() for k, v in batch.items()}   
-                        # pdb.set_trace()            
                         loss, logits, last_hidden = model_engine(**batch)
                         predictions = logits.argmax(dim=-1)
                         pooled = get_maha_embedding(batch['input_ids'], last_hidden, config)
@@ -901,59 +900,40 @@ def main():
 
                 if args.local_rank == 0:
                     eval_metric.update({'accuracy':acc})
-                    write_setting = 'w' if is_first_write else 'a'
+                    write_setting = 'w' if epoch < 1 else 'a'
                     print(f'log_path: {log_path}')
                     with open(log_path, write_setting) as f:
                         csv_writer = csv.writer(f, delimiter='\t')
                         title = sorted(eval_metric.keys())
                         print(f'write_setting: {write_setting}')
                         print(f'title: {title}')
-                        if is_first_write:
+                        # if write_setting == 'w':
+                        if not os.path.exists(log_path):
                             csv_writer.writerow(title)
-                            is_first_write = False
                         csv_writer.writerow([eval_metric[k] for k in title])
                     for k, v in eval_metric.items():
                         writer.add_scalar(f'Validation/{k}', eval_metric[k], model_engine.global_steps)
                     logger.info(f"Validation step {model_engine.global_steps} results {acc}")
+                    if best_eval_metric == None or best_eval_metric['accuracy'] <= acc:
+                        best_eval_metric = eval_metric
         torch.distributed.barrier()
         
         if acc > best_acc:
             best_acc = acc
-            save_flag = True      
             patience = 0      
         else:
-            save_flag = False
             patience += 1
         
-        # path, key, value, current rank, writer rank
-        # set_value_to_shared_json_file(args.output_dir, 'save_flag', save_flag, args.local_rank, 0)
-        # save_flag = get_value_from_shared_json_file(args.output_dir, 'save_flag')
-        # if save_flag:
-            # model_engine.save_checkpoint(args.output_dir)
     if args.local_rank == 0:
+        # print('Write best result')
+        # with open(log_path, 'a') as f:
+        #     with open(log_path, write_setting) as f:
+        #         csv_writer = csv.writer(f, delimiter='\t')
+        #         title = sorted(best_eval_metric.keys())
+        #         csv_writer.writerow([best_eval_metric[k] for k in title])
         end = time()
         with open(os.path.join(args.output_dir, 'elapsed_time.txt'), 'w') as f:
             f.write(f'{(end - start) // 3600}h {((end - start) % 3600) // 60}m {(end - start) % 60}s')
-    # load best dev model 
-    # TODO: In ZeRO3 load checkpoint after save checkpoint do not work!!
-    # if not args.is_zero3:
-    #     model_engine.load_checkpoint(args.output_dir)
-    #     model_engine.eval()
-    #     for step, batch in enumerate(test_dataloader):
-    #         with torch.no_grad():
-    #             batch = {k: v.cuda() for k, v in batch.items()}
-    #             # TODO : fix?
-    #             _, predictions, _ = model_engine(**batch)
-    #             metric.add_batch(
-    #                 predictions=predictions,
-    #                 references=batch["labels"],
-    #             )
-    #     test_metric = metric.compute()
-    #     if args.local_rank == 0:
-    #         writer.add_scalar('Test/Accuracy', test_metric['accuracy'])
-    #         if "f1" in test_metric.keys():
-    #             writer.add_scalar('Test/F1', test_metric['f1'], model_engine.global_steps)
-    #         logger.info(f"TEST results {test_metric}")
 
 if __name__ == "__main__":
     main()

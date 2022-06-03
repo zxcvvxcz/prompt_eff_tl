@@ -382,7 +382,8 @@ def check_ood_eval_condition(args, curr_acc):
                     ood_threshold = 98 if param_ratio == 0.1 else 99
                 elif split == False:
                     ood_threshold = 93 if param_ratio == 0.1 else 96
-            
+            if args.apply_prefix:
+                ood_threshold -= 4
         elif 't5-3b' in model_name:
             param_ratio = 0.1 if args.adapter_size < 39 else 1
             if task_name == 'banking77':

@@ -5,12 +5,7 @@ import math
 import os
 import random
 import json
-from pathlib import Path
 from functools import partial
-import pdb
-import pandas as pd
-
-import numpy as np
 import datasets
 from datasets import load_dataset, load_metric, DatasetDict
 from torch.utils.data import DataLoader
@@ -35,18 +30,20 @@ from transformers import (
 import torch
 import torch.nn.functional as F
 import deepspeed
+from deepspeed.runtime.utils import see_memory_usage
 from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 from deepspeed.runtime.utils import see_memory_usage
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
-from transformers import AutoModel, GPT2Tokenizer, GPT2Model, GPTNeoModel, GPTJModel, T5Tokenizer, T5Model
+from transformers import AutoModel, GPT2Tokenizer, GPT2Model, GPTNeoModel, GPTJModel, T5Tokenizer, T5Model, T5EncoderModel, T5ForConditionalGeneration
 
 from model_wrapper.GPT2Wrapper import GPT2Wrapper
+from model_wrapper.T5Wrapper import T5EncWrapper
 from model_wrapper.InputProcessor import *
 from model_wrapper.OutputProcessor import BaseOutputProcessor
 from utils import save_config, set_value_to_shared_json_file, get_value_from_shared_json_file
 
-from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn
+from ood_utils import load_intent_datasets, preprocess_dataset_for_transformers, collate_fn, check_ood_eval_condition
 from ood_eval import prepare_ood, get_maha_embedding
 logger = logging.getLogger(__name__)
 start = time()
@@ -112,6 +109,22 @@ def parse_args():
         required=True,
     )
     parser.add_argument(
+        "--load_init_model",
+        action="store_true",
+        help="If passed, initialize model from zero checkpoint.",
+    )
+    parser.add_argument(
+        "--save_init_model",
+        action="store_true",
+        help="If passed, save initial model as zero checkpoint.",
+    )
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        default=os.path.join("ckpt"),
+        help="If passed, save initial model as zero checkpoint.",
+    )
+    parser.add_argument(
         "--lr",
         type=float,
         default=5e-5,
@@ -169,7 +182,7 @@ def parse_args():
     parser.add_argument(
         "--seed", 
         type=int, 
-        default=None, 
+        default=42, 
         help="A seed for reproducible training."
     )
     parser.add_argument(
@@ -229,13 +242,13 @@ def parse_args():
     parser.add_argument(
         '--adapter_size', 
         default=2,
-        type=int,
+        type=int, 
         help='size of adapter'
     )
     parser.add_argument(
         '--adapter_type', 
         default='houlsby',
-        type=str, 
+        type=str,
         help='type of adapter(houlsby, pfeiffer)'
     )
 
@@ -288,6 +301,12 @@ def parse_args():
         type=str, 
         help='Where do you want to store the pretrained models downloaded from huggingface.co'
     )
+    parser.add_argument(
+        '--apply_linear', 
+        default=False, 
+        action="store_true",
+        help='apply linear evaluation'
+    )
     
     # OOD
     parser.add_argument(
@@ -297,7 +316,7 @@ def parse_args():
     )
     parser.add_argument(
         '--split_ratio', 
-        default=0.5, 
+        default=0.25, 
         type=float, 
         help='Split ratio for intent datasets.'
     )
@@ -326,7 +345,12 @@ def parse_args():
     with open(args.ds_config, "r", encoding="utf-8") as ds_f:
         ds_config = json.load(ds_f)
     args.per_device_batch_size = ds_config['train_micro_batch_size_per_gpu']
-    args.gradient_accumulation_steps = ds_config['gradient_accumulation_steps']
+    if args.gradient_accumulation_steps != ds_config['gradient_accumulation_steps']:
+        print('gradient_accumulation_steps mismatch!')
+        if args.gradient_accumulation_steps == 1 or ds_config['gradient_accumulation_steps'] != 1:
+            args.gradient_accumulation_steps = ds_config['gradient_accumulation_steps']
+        else:
+            ds_config['gradient_accumulation_steps'] = args.gradient_accumulation_steps
     if ds_config.get("zero_optimization"):
         args.is_zero3 = ds_config["zero_optimization"]["stage"] == 3
     else:
@@ -458,21 +482,31 @@ def main():
         apply_prefix=args.apply_prefix, num_prefix=args.num_prefix, mid_dim=args.mid_dim,
         apply_encoder=args.apply_encoder, apply_input=args.apply_input, encoder_model_name_or_path=args.encoder_model_name_or_path,
         freeze_encoder=args.freeze_encoder, prompt_length=args.prompt_length, 
-        apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, adapter_type=args.adapter_type,
+        apply_adapter=args.apply_adapter, adapter_size=args.adapter_size, 
         reparameterize=args.reparameterize,
     )
-    
     # TODO : fix?
     if args.is_zero3:
         zero_init_start_time = time()
         see_memory_usage('Before zero init', True)
         with deepspeed.zero.Init(config_dict_or_path=args.ds_config):
-            model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
-            # model = AutoModel.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
-            # model = BaseInputProcessor(config=config, embeddings=model.wte)
+            if 't5' in args.model_name_or_path:
+                model = T5EncWrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                    args.load_init_model, args.ckpt_path)
+            else:
+                model = GPT2Wrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                    args.load_init_model, args.ckpt_path)
+           
         print(f"Zero init time: {time() - zero_init_start_time}")
     else:
-        model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
+        if 't5' in args.model_name_or_path:
+            model = T5EncWrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                args.load_init_model, args.ckpt_path)
+        else:
+            model = GPT2Wrapper(config, args.model_name_or_path, args.cache_dir, (args.task_name in intent_tasks), 
+                                args.load_init_model, args.ckpt_path)
+            
+        # model = GPT2Wrapper(config=config, model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir, get_last_hidden_state=(args.task_name in intent_tasks))
     # pdb.set_trace()
    # Preprocessing the datasets
     see_memory_usage('After init', True)
@@ -562,6 +596,7 @@ def main():
 
     train_sampler = DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, collate_fn=data_collator, batch_size=args.per_device_batch_size)
+    maha_dataloader = DataLoader(train_dataset, shuffle=False, collate_fn=data_collator, batch_size=args.per_device_batch_size)
     if args.task_name in intent_tasks:
         test_ind_sampler = DistributedSampler(test_ind_dataset)
         test_ind_dataloader = DataLoader(test_ind_dataset, sampler=test_ind_sampler, collate_fn=data_collator, batch_size=args.per_device_batch_size, shuffle=False)       
@@ -589,6 +624,22 @@ def main():
             label_id_list.append(label)
     label_id_list.sort()
     
+    # Get the metric function
+    experiment_id = os.environ["MASTER_PORT"] # since master port should be different for multiple execution, it can serve as experiment id
+
+    if args.task_name in intent_tasks:
+        ood_metric_energy = load_metric('OOD', 'energy', num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+        ood_metric_softmax = load_metric('OOD', 'softmax', num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+        ood_metric_maha = load_metric('OOD', 'maha', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list, experiment_id=experiment_id)
+        ood_metric_cosine = load_metric('OOD', 'cosine', num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+        ind_metric = load_metric('accuracy', num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+        ind_metric_maha = load_metric('IND', 'maha_acc', num_process=args.world_size, process_id=args.local_rank, label_id_list=label_id_list, experiment_id=experiment_id)
+        metrics = [ind_metric, ind_metric_maha, ood_metric_softmax, ood_metric_energy, ood_metric_cosine, ood_metric_maha]
+    elif args.task_name is not None:
+        metric = load_metric('glue', args.task_name, num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+    else:
+        metric = load_metric("accuracy", num_process=args.world_size, process_id=args.local_rank, experiment_id=experiment_id)
+
     # Set params to train
     trainable_param_names = []
     if args.apply_lora:
@@ -599,9 +650,8 @@ def main():
         trainable_param_names.append('adapter')
     if args.apply_encoder:
         trainable_param_names.append('encoder')
-
-    # if no trainable_param_names -> full fine tune
-    if len(trainable_param_names) > 0:
+        
+    if len(trainable_param_names) > 0 or args.apply_linear:
         for name, param in model.named_parameters():
             # train main model? (== fine-tuning)
             if name.startswith('transformer'):
@@ -625,12 +675,25 @@ def main():
                     if args.local_rank == 0:
                         logger.info(f'>> OTHERS {name} {param.shape} -> {param.numel()}')
                 
+    # Split weights in two groups, one with weight decay and the other not.
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and p.requires_grad==True],
+            "weight_decay": args.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and p.requires_grad==True],
+            "weight_decay": 0.0,
+        },
+    ]
     
     if args.local_rank == 0:
         num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        num_trainable_params_except_linear = num_trainable_params - num_labels * model.transformer.wte.embedding_dim
         num_total_params = sum(p.numel() for p in model.parameters())
         transformer_params = sum(p.numel() for n,p in model.named_parameters() if n.startswith('transformer'))
-        logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
+        # logger.info(f'trainable params {num_trainable_params} / total params {num_total_params} = ratio {100 * num_trainable_params/num_total_params} ')
         
         ## Write parameter info ##
         parameter_summary_file = os.path.join(args.output_dir, "parameter_summary.txt")
@@ -639,7 +702,7 @@ def main():
             file_writer.write(f"Trained     parameters\t{num_trainable_params}\n")
             file_writer.write(f"Transformer parameters\t{transformer_params}\n")
             file_writer.write(f"Total       parameters\t{num_total_params}\n")
-            file_writer.write(f"Trainable   ratio\t\t{100 * num_trainable_params / num_total_params} \n")
+            # file_writer.write(f"Trainable   ratio\t\t{100 * num_trainable_params / num_total_params} \n")
             file_writer.write("=" * 50 + '\n')
             file_writer.write("Trained parameters detail\n")
 
@@ -647,6 +710,28 @@ def main():
                 if param.requires_grad == True:
                     file_writer.write(f"{name} > {param.shape} \n")
     
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
+
+    lr_scheduler = get_scheduler(
+        name=args.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=args.num_warmup_steps,
+        num_training_steps=args.max_train_steps,
+        lr_ratio=args.lr_ratio
+    )
+    see_memory_usage('Before model engine', True)
+    model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, config=args.ds_config)
+    if args.load_init_model:
+        load_path, client_sd = model_engine.load_checkpoint(args.ckpt_path)
+        print(f'Loaded initial model from {load_path}')
+    if args.save_init_model:
+        model_engine.save_checkpoint(args.ckpt_path)
+        print(f'Saved initial model in {load_path}')
+    see_memory_usage('After model engine', True)
+    # pdb.set_trace()
+    # del model
+    # see_memory_usage('After delete model', True)
+    # Train!
     if args.local_rank == 0:
         total_batch_size = args.per_device_batch_size * args.world_size * args.gradient_accumulation_steps
         logger.info("***** Running training *****")
@@ -659,8 +744,45 @@ def main():
         logger.info(f"  Random Seed = {args.seed}")
         logger.info(f"  Total optimization steps = {args.max_train_steps}")
         logger.info(f"  Number of trainable params = {num_trainable_params}")
+        logger.info(f"  Number of trainable params by eff method = {num_trainable_params_except_linear}")
         logger.info(f"  Number of total params = {num_total_params}")
-        logger.info(f"  % of trainable params = {(100 * num_trainable_params/num_total_params):.3f}")
+        logger.info(f"  Number of PLM params = {transformer_params}")
+        logger.info(f"  % of trainable params per whole model (old) = {(100 * num_trainable_params/num_total_params):.3f}")
+        logger.info(f"  % of trainable params per PLM only (new) = {(100 * num_trainable_params_except_linear/transformer_params):.3f}")
+        if args.apply_lora:
+            eff_method = 'lora'
+            hyperparams = [args.lora_r, args.lora_alpha]
+        elif args.apply_adapter:
+            eff_method = 'adapter'
+            hyperparams = [args.adapter_size, 0]
+        elif args.apply_prefix:
+            eff_method = 'prefix'
+            hyperparams = [args.mid_dim, args.num_prefix]
+        else:
+            eff_method = 'fine_tune'
+            hyperparams = [0, 0]
+        
+        row = [args.model_name_or_path, eff_method, 
+            100 * num_trainable_params_except_linear/transformer_params, 
+            hyperparams[0], hyperparams[1]
+            ]
+        if not os.path.exists("param_ratio.csv"):
+            with open("param_ratio.csv", 'w') as f:
+                wr = csv.writer(f)
+                # hyperparam1: lora_r, adapter_size, mid_dim
+                # hyperparam2: lora_alpha, None, num_prefix
+                title = ['model_name', 'eff_method', 'train_ratio', 'hyperparam_1', 'hyperparam_2']
+                
+                wr.writerow(title)
+                wr.writerow(row)
+        else:
+            with open("param_ratio.csv", 'a') as f:
+                wr = csv.writer(f)
+                wr.writerow(row)
+
+
+
+
 
 if __name__ == "__main__":
     main()

@@ -140,3 +140,5 @@ outputs
 .bash_history
 .python_history
 .venv
+old_*
+*_old
