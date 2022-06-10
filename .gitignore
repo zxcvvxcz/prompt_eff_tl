@@ -134,7 +134,7 @@ dmypy.json
 # setup*
 model_data*
 test_output
-outputs
+outputs*
 *.txt
 .nv
 .bash_history
