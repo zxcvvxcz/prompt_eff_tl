@@ -11,6 +11,10 @@ def main():
         with open(f'run_best_{task_name}_{ratio}.sh', 'w') as f:
             for idx, row in df_max.iterrows():
                 model, eff_method, hp1, hp2 = idx
+                # if 'gpt-j' in model:
+                #     continue
+                if 'gpt-j' in model or 'gpt-neo' in model:
+                    model = 'EleutherAI/' + model[:-1] + 'B'
                 lr = row['lr']
                 master_port = 24998
                 localhost='1,2'
