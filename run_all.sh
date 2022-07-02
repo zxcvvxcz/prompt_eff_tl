@@ -83,3 +83,5 @@ do
         done
     done
 done
+
+# deepspeed --include localhost:2 --master_port 24988 main_ood.py --overwrite_output_dir --task_name banking77 --split --split_ratio 0.25 --model_name_or_path EleutherAI/gpt-neo-2.7B --ds_config ds_configs_samples/zero1_config.json --output_dir outputs/banking77/0.25/EleutherAI/gpt-neo-2.7B --num_train_epochs 40 --cache_dir ~/data/model_data --lr 8e-4 --weight_decay 0.1 --lr_scheduler_type cosine --num_warmup_steps 200 --apply_adapter --adapter_size 81

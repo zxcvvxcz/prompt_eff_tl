@@ -421,7 +421,7 @@ def main():
     log_path = os.path.join(args.output_dir, log_tsv_name + '.tsv')
     log_path_acc_only = os.path.join(args.output_dir, log_tsv_name + '_acc.tsv')
     acc_path = os.path.join(args.output_dir, log_tsv_name + '_acc.txt')
-    
+    print(f'{log_path=}')
     if os.path.exists(log_path):
         print('Train result already exists!')
         return
