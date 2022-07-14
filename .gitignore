@@ -142,3 +142,5 @@ outputs*
 .venv
 old_*
 *_old
+*.sh
+bert.py

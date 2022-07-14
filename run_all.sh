@@ -4,8 +4,8 @@
 
 master_port=29498
 
-for model_name in gpt2 gpt2-medium gpt2-xl gpt2-large
-# for model_name in EleutherAI/gpt-j-6B gpt2 gpt2-medium gpt2-xl gpt2-large EleutherAI/gpt-neo-2.7B
+# for model_name in gpt2 gpt2-medium gpt2-xl gpt2-large
+for model_name in EleutherAI/gpt-j-6B gpt2 gpt2-medium gpt2-xl gpt2-large EleutherAI/gpt-neo-2.7B
 do
     if [ $model_name = gpt2 ]
     then
@@ -30,8 +30,8 @@ do
     elif [ $model_name = EleutherAI/gpt-j-6B ]
     then
         r_list="13 64 129"
-        # a_list="12 63 128"
-        a_list="63 128"
+        a_list="12 63 128"
+        # a_list="12"
         p_dim_list="24 125 252"
     elif [ $model_name = EleutherAI/gpt-neo-2.7B ]
     then 

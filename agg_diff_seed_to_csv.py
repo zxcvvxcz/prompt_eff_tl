@@ -72,7 +72,7 @@ def main():
         df4 = df3.groupby(['model','eff_method','hyperparam_1','hyperparam_2','lr']).agg(['mean', np.std, 'count'])
         df5 = df4[df4['accuracy', 'count'] >= 5]
         for col in df5.columns:
-            if 'seed' in col or 'count' in col:
+            if 'seed' in col or ('count' in col and 'maha accuracy' not in col):
                 df5.pop(col)
         # df_save = df5.groupby(['model','eff_method','hyperparam_1','hyperparam_2','lr']).agg(['mean', np.std])
         df_save = df5

@@ -326,6 +326,11 @@ def parse_args():
         type=float, 
         help='Learning ratio for custom cosine lr scheduler, must be between 0.1~0.2.'
     )
+    parser.add_argument(
+        '--skip_ood', 
+        action="store_true", 
+        help='Skip ood evaluation.'
+    )
 
 
     args = parser.parse_args()
@@ -421,8 +426,8 @@ def main():
     log_path = os.path.join(args.output_dir, log_tsv_name + '.tsv')
     log_path_acc_only = os.path.join(args.output_dir, log_tsv_name + '_acc.tsv')
     acc_path = os.path.join(args.output_dir, log_tsv_name + '_acc.txt')
-    print(f'{log_path=}')
-    if os.path.exists(log_path):
+    print(f'{acc_path=}')
+    if os.path.exists(acc_path):
         print('Train result already exists!')
         return
 
@@ -829,7 +834,8 @@ def main():
                 acc = float(f.read())
                 print(acc)
             eval_metric = {}
-            if check_ood_eval_condition(args, acc * 100):
+            if acc > 0.95 and not args.skip_ood:
+            # if check_ood_eval_condition(args, acc * 100):
                 class_mean, class_var, norm_bank = prepare_ood(model_engine, maha_dataloader, config)
             
                 for step, batch in enumerate(test_ind_dataloader):
